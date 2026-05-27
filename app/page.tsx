@@ -3,7 +3,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-type Seccion = "inicio" | "productos" | "ventas" | "caja" | "clientes" | "reportes";
+type Seccion =
+  | "inicio"
+  | "productos"
+  | "ventas"
+  | "caja"
+  | "clientes"
+  | "gastos"
+  | "reportes"
+  | "capacitaciones";
 
 type Comercio = {
   id: number;
@@ -87,6 +95,47 @@ type HistorialCaja = {
   diferencia: number;
 };
 
+type Gasto = {
+  id: number;
+  comercioId: number;
+  fecha: string;
+  categoria: string;
+  concepto: string;
+  proveedor: string;
+  monto: number;
+  medioPago: string;
+  observaciones: string;
+};
+
+type Capacitacion = {
+  id: number;
+  titulo: string;
+  descripcion: string;
+  modalidad: string;
+  lugar: string;
+  fechaInicio: string | null;
+  fechaFin: string | null;
+  cupos: number | null;
+  destinatarios: string;
+  link: string;
+  estado: string;
+  createdAt: string;
+};
+
+type InscripcionCapacitacion = {
+  id: number;
+  capacitacionId: number;
+  userId: string;
+  comercioId: number;
+  nombreComercio: string;
+  emailUsuario: string;
+  nombreInscripto: string;
+  telefonoInscripto: string;
+  observaciones: string;
+  estado: string;
+  createdAt: string;
+};
+
 const cajaVacia = (comercioId = 0): Caja => ({
   id: 0,
   comercioId,
@@ -116,6 +165,7 @@ export default function Home() {
   const [seccion, setSeccion] = useState<Seccion>("inicio");
   const [usuario, setUsuario] = useState<any>(null);
   const [comercioActual, setComercioActual] = useState<Comercio | null>(null);
+  const [rolUsuario, setRolUsuario] = useState("admin_comercio");
   const [cargandoUsuario, setCargandoUsuario] = useState(true);
   const [cargandoDatos, setCargandoDatos] = useState(false);
   const [modoRegistro, setModoRegistro] = useState(false);
@@ -135,6 +185,9 @@ export default function Home() {
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [movimientosCaja, setMovimientosCaja] = useState<MovimientoCaja[]>([]);
   const [historialCajas, setHistorialCajas] = useState<HistorialCaja[]>([]);
+  const [gastos, setGastos] = useState<Gasto[]>([]);
+  const [capacitaciones, setCapacitaciones] = useState<Capacitacion[]>([]);
+  const [inscripcionesCapacitaciones, setInscripcionesCapacitaciones] = useState<InscripcionCapacitacion[]>([]);
   const [caja, setCaja] = useState<Caja>(cajaVacia());
 
   useEffect(() => {
@@ -228,11 +281,12 @@ export default function Home() {
     };
 
     setComercioActual(comercio);
-    await cargarDatos(comercio.id);
+    setRolUsuario(data.rol || "admin_comercio");
+    await cargarDatos(comercio.id, data.rol || "admin_comercio");
     setCargandoDatos(false);
   }
 
-  async function cargarDatos(comercioId?: number) {
+  async function cargarDatos(comercioId?: number, rol?: string) {
     const idComercio = comercioId || comercioActual?.id;
 
     if (!idComercio) return;
@@ -242,6 +296,8 @@ export default function Home() {
       cargarClientes(idComercio),
       cargarCajasYMovimientos(idComercio),
       cargarVentas(idComercio),
+      cargarGastos(idComercio),
+      cargarCapacitaciones(idComercio, rol || rolUsuario),
     ]);
   }
 
@@ -412,6 +468,94 @@ export default function Home() {
     setHistorialCajas(historial);
   }
 
+  async function cargarGastos(comercioId: number) {
+    const { data, error } = await supabase
+      .from("gastos")
+      .select("*")
+      .eq("comercio_id", comercioId)
+      .order("fecha", { ascending: false });
+
+    if (error) {
+      alert("Error al cargar gastos: " + error.message);
+      return;
+    }
+
+    setGastos(
+      (data || []).map((g: any) => ({
+        id: g.id,
+        comercioId: g.comercio_id,
+        fecha: g.fecha,
+        categoria: g.categoria || "",
+        concepto: g.concepto || "",
+        proveedor: g.proveedor || "",
+        monto: Number(g.monto || 0),
+        medioPago: g.medio_pago || "",
+        observaciones: g.observaciones || "",
+      }))
+    );
+  }
+
+  async function cargarCapacitaciones(comercioId: number, rol?: string) {
+    const { data: capacitacionesData, error: capacitacionesError } = await supabase
+      .from("capacitaciones")
+      .select("*")
+      .order("fecha_inicio", { ascending: true, nullsFirst: false });
+
+    if (capacitacionesError) {
+      alert("Error al cargar capacitaciones: " + capacitacionesError.message);
+      return;
+    }
+
+    let inscripcionesQuery = supabase
+      .from("capacitaciones_inscripciones")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if ((rol || rolUsuario) !== "admin_secretaria") {
+      inscripcionesQuery = inscripcionesQuery.eq("comercio_id", comercioId);
+    }
+
+    const { data: inscripcionesData, error: inscripcionesError } = await inscripcionesQuery;
+
+    if (inscripcionesError) {
+      alert("Error al cargar inscripciones: " + inscripcionesError.message);
+      return;
+    }
+
+    setCapacitaciones(
+      (capacitacionesData || []).map((c: any) => ({
+        id: c.id,
+        titulo: c.titulo,
+        descripcion: c.descripcion || "",
+        modalidad: c.modalidad || "",
+        lugar: c.lugar || "",
+        fechaInicio: c.fecha_inicio,
+        fechaFin: c.fecha_fin,
+        cupos: c.cupos === null ? null : Number(c.cupos),
+        destinatarios: c.destinatarios || "",
+        link: c.link || "",
+        estado: c.estado || "activa",
+        createdAt: c.created_at,
+      }))
+    );
+
+    setInscripcionesCapacitaciones(
+      (inscripcionesData || []).map((i: any) => ({
+        id: i.id,
+        capacitacionId: i.capacitacion_id,
+        userId: i.user_id,
+        comercioId: i.comercio_id,
+        nombreComercio: i.nombre_comercio || "",
+        emailUsuario: i.email_usuario || "",
+        nombreInscripto: i.nombre_inscripto || "",
+        telefonoInscripto: i.telefono_inscripto || "",
+        observaciones: i.observaciones || "",
+        estado: i.estado || "inscripto",
+        createdAt: i.created_at,
+      }))
+    );
+  }
+
   async function iniciarSesion() {
     if (!email || !password) {
       alert("Ingresá email y contraseña.");
@@ -500,6 +644,7 @@ export default function Home() {
     setRegistroRubro("");
     setRegistroTelefono("");
     setRegistroDireccion("");
+    setRolUsuario("admin_comercio");
     setModoRegistro(false);
 
     alert("Cuenta y comercio creados correctamente.");
@@ -515,6 +660,10 @@ export default function Home() {
     setVentas([]);
     setMovimientosCaja([]);
     setHistorialCajas([]);
+    setGastos([]);
+    setCapacitaciones([]);
+    setInscripcionesCapacitaciones([]);
+    setRolUsuario("admin_comercio");
     setCaja(cajaVacia());
   }
 
@@ -663,6 +812,7 @@ export default function Home() {
           setSeccion={setSeccion}
           emailUsuario={usuario.email}
           comercioActual={comercioActual}
+          rolUsuario={rolUsuario}
           cerrarSesion={cerrarSesion}
         />
 
@@ -730,6 +880,28 @@ export default function Home() {
             />
           )}
 
+          {seccion === "gastos" && (
+            <Gastos
+              gastos={gastos}
+              setGastos={setGastos}
+              comercioActual={comercioActual}
+              recargarDatos={cargarDatos}
+            />
+          )}
+
+          {seccion === "capacitaciones" && (
+            <Capacitaciones
+              capacitaciones={capacitaciones}
+              setCapacitaciones={setCapacitaciones}
+              inscripciones={inscripcionesCapacitaciones}
+              setInscripciones={setInscripcionesCapacitaciones}
+              comercioActual={comercioActual}
+              usuario={usuario}
+              rolUsuario={rolUsuario}
+              recargarDatos={cargarDatos}
+            />
+          )}
+
           {seccion === "reportes" && (
             <Reportes
               ventas={ventas}
@@ -740,6 +912,7 @@ export default function Home() {
               egresosCaja={egresosCaja}
               saldoCajaEstimado={saldoCajaEstimado}
               historialCajas={historialCajas}
+              gastos={gastos}
             />
           )}
         </section>
@@ -753,42 +926,84 @@ function Sidebar({
   setSeccion,
   emailUsuario,
   comercioActual,
+  rolUsuario,
   cerrarSesion,
 }: {
   seccion: Seccion;
   setSeccion: (seccion: Seccion) => void;
   emailUsuario: string;
   comercioActual: Comercio | null;
+  rolUsuario: string;
   cerrarSesion: () => void;
 }) {
-  const items: { id: Seccion; label: string }[] = [
-    { id: "inicio", label: "Inicio" },
-    { id: "ventas", label: "Ventas" },
-    { id: "productos", label: "Productos" },
-    { id: "caja", label: "Caja" },
-    { id: "clientes", label: "Clientes" },
-    { id: "reportes", label: "Reportes" },
+  const grupos: { titulo: string; items: { id: Seccion; label: string; icono: string }[] }[] = [
+    {
+      titulo: "Gestión",
+      items: [
+        { id: "inicio", label: "Inicio", icono: "◇" },
+        { id: "productos", label: "Productos", icono: "▦" },
+        { id: "clientes", label: "Clientes", icono: "◉" },
+      ],
+    },
+    {
+      titulo: "Operación",
+      items: [
+        { id: "ventas", label: "Ventas", icono: "↗" },
+        { id: "caja", label: "Caja", icono: "$" },
+        { id: "gastos", label: "Gastos", icono: "−" },
+      ],
+    },
+    {
+      titulo: "Análisis",
+      items: [{ id: "reportes", label: "Reportes", icono: "▣" }],
+    },
+    {
+      titulo: "Secretaría",
+      items: [{ id: "capacitaciones", label: "Capacitaciones", icono: "✦" }],
+    },
   ];
+
+  const etiquetaRol = rolUsuario === "admin_secretaria" ? "Secretaría" : "Comercio";
 
   return (
     <aside style={styles.sidebar}>
-      <h1 style={styles.logo}>{comercioActual?.nombre || "Mi Comercio"}</h1>
-      <p style={styles.logoSub}>Sistema de gestión</p>
-      <p style={{ color: "#94a3b8", fontSize: 12, marginTop: 8 }}>{emailUsuario}</p>
+      <div style={styles.sidebarGlow} />
 
-      <nav style={{ marginTop: 32 }}>
-        {items.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => setSeccion(item.id)}
-            style={{
-              ...styles.navItem,
-              background: seccion === item.id ? "#2563eb" : "transparent",
-              color: seccion === item.id ? "white" : "#cbd5e1",
-            }}
-          >
-            {item.label}
-          </button>
+      <div style={styles.sidebarHeaderBox}>
+        <p style={styles.logoKicker}>Sistema de Gestión</p>
+        <h1 style={styles.logo}>{comercioActual?.nombre || "Mi Comercio"}</h1>
+        <div style={styles.rolePill}>{etiquetaRol}</div>
+      </div>
+
+      <p style={styles.sidebarEmail}>{emailUsuario}</p>
+
+      <nav style={{ marginTop: 26 }}>
+        {grupos.map((grupo) => (
+          <div key={grupo.titulo} style={{ marginBottom: 18 }}>
+            <p style={styles.navGroupTitle}>{grupo.titulo}</p>
+            {grupo.items.map((item) => {
+              const activo = seccion === item.id;
+
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setSeccion(item.id)}
+                  style={{
+                    ...styles.navItem,
+                    background: activo
+                      ? "linear-gradient(135deg, rgba(239,68,68,0.92), rgba(127,29,29,0.94))"
+                      : "rgba(15, 23, 42, 0.24)",
+                    color: activo ? "white" : "#cbd5e1",
+                    borderColor: activo ? "rgba(248, 113, 113, 0.75)" : "rgba(148, 163, 184, 0.12)",
+                    boxShadow: activo ? "0 12px 24px rgba(127, 29, 29, 0.35)" : "none",
+                  }}
+                >
+                  <span style={styles.navIcon}>{item.icono}</span>
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
         ))}
       </nav>
 
@@ -839,7 +1054,7 @@ function Inicio({
       <div style={styles.cardsGrid}>
         <Card title="Productos" value={String(productos.length)} />
         <Card title="Ventas caja actual" value={String(ventasCajaActual.length)} />
-        <Card title="Caja actual" value={caja.abierta ? `#${caja.id}` : "Sin caja"} />
+        <Card title="Caja actual" value={caja.abierta ? "Abierta" : "Sin caja"} />
         <Card title="Apertura" value={caja.fechaApertura ? formatDate(caja.fechaApertura) : "Sin apertura"} />
       </div>
 
@@ -855,7 +1070,7 @@ function Inicio({
               .map((venta) => (
                 <Row
                   key={venta.id}
-                  left={`Venta #${venta.id} - Caja #${venta.cajaId} - ${venta.medioPago}`}
+                  left={`Venta - ${venta.medioPago}`}
                   right={money(venta.total)}
                 />
               ))
@@ -1465,7 +1680,7 @@ function Caja({
 
       <div style={styles.cardsGrid}>
         <Card title="Estado" value={caja.abierta ? "Abierta" : "Cerrada"} />
-        <Card title="Caja actual" value={caja.abierta ? `#${caja.id}` : "Sin caja"} />
+        <Card title="Caja actual" value={caja.abierta ? "Abierta" : "Sin caja"} />
         <Card title="Saldo inicial" value={money(caja.saldoInicial)} />
         <Card title="Saldo actual estimado" value={money(saldoCajaEstimado)} />
       </div>
@@ -1536,7 +1751,6 @@ function Caja({
             <table style={styles.table}>
               <thead style={styles.thead}>
                 <tr>
-                  <Th>#</Th>
                   <Th>Apertura</Th>
                   <Th>Cierre</Th>
                   <Th>Saldo inicial</Th>
@@ -1554,7 +1768,6 @@ function Caja({
                   .reverse()
                   .map((historial) => (
                     <tr key={historial.id} style={styles.tr}>
-                      <Td>{historial.id}</Td>
                       <Td>{formatDate(historial.fechaApertura)}</Td>
                       <Td>{formatDate(historial.fechaCierre)}</Td>
                       <Td>{money(historial.saldoInicial)}</Td>
@@ -1783,7 +1996,7 @@ function Ventas({
 
           {caja.abierta && (
             <p style={styles.text}>
-              Caja actual: <strong>#{caja.id}</strong>
+              Caja actual: <strong>Abierta</strong>
             </p>
           )}
 
@@ -1856,10 +2069,469 @@ function Ventas({
             .map((venta) => (
               <Row
                 key={venta.id}
-                left={`#${venta.id} - Caja #${venta.cajaId} - ${formatDate(venta.fecha)} - ${venta.cliente} - ${venta.medioPago}`}
+                left={`${formatDate(venta.fecha)} - ${venta.cliente} - ${venta.medioPago}`}
                 right={money(venta.total)}
               />
             ))
+        )}
+      </Panel>
+    </>
+  );
+}
+
+function Gastos({
+  gastos,
+  setGastos,
+  comercioActual,
+  recargarDatos,
+}: {
+  gastos: Gasto[];
+  setGastos: (gastos: Gasto[]) => void;
+  comercioActual: Comercio | null;
+  recargarDatos: () => Promise<void>;
+}) {
+  const [form, setForm] = useState({
+    categoria: "",
+    concepto: "",
+    proveedor: "",
+    monto: "",
+    medioPago: "Efectivo",
+    observaciones: "",
+  });
+
+  const totalGastos = gastos.reduce((acc, gasto) => acc + gasto.monto, 0);
+
+  async function agregarGasto() {
+    if (!comercioActual) {
+      alert("No hay comercio asociado.");
+      return;
+    }
+
+    if (!form.categoria || !form.concepto || !form.monto) {
+      alert("Completá categoría, concepto y monto.");
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("gastos")
+      .insert({
+        comercio_id: comercioActual.id,
+        categoria: form.categoria,
+        concepto: form.concepto,
+        proveedor: form.proveedor,
+        monto: Number(form.monto),
+        medio_pago: form.medioPago,
+        observaciones: form.observaciones,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      alert("Error al guardar gasto: " + error.message);
+      return;
+    }
+
+    setGastos([
+      {
+        id: data.id,
+        comercioId: data.comercio_id,
+        fecha: data.fecha,
+        categoria: data.categoria || "",
+        concepto: data.concepto || "",
+        proveedor: data.proveedor || "",
+        monto: Number(data.monto || 0),
+        medioPago: data.medio_pago || "",
+        observaciones: data.observaciones || "",
+      },
+      ...gastos,
+    ]);
+
+    setForm({
+      categoria: "",
+      concepto: "",
+      proveedor: "",
+      monto: "",
+      medioPago: "Efectivo",
+      observaciones: "",
+    });
+
+    await recargarDatos();
+  }
+
+  return (
+    <>
+      <Header title="Gastos" subtitle="Carga de gastos para mejorar reportes financieros y flujo de caja." />
+
+      <div style={styles.cardsGrid}>
+        <Card title="Gastos cargados" value={String(gastos.length)} />
+        <Card title="Total de gastos" value={money(totalGastos)} />
+        <Card title="Último gasto" value={gastos[0] ? money(gastos[0].monto) : "$ 0"} />
+        <Card title="Categorías" value={String(new Set(gastos.map((g) => g.categoria)).size)} />
+      </div>
+
+      <Panel title="Nuevo gasto">
+        <div style={styles.formGrid}>
+          <Input placeholder="Categoría" value={form.categoria} onChange={(v) => setForm({ ...form, categoria: v })} />
+          <Input placeholder="Concepto" value={form.concepto} onChange={(v) => setForm({ ...form, concepto: v })} />
+          <Input placeholder="Proveedor" value={form.proveedor} onChange={(v) => setForm({ ...form, proveedor: v })} />
+          <Input placeholder="Monto" type="number" value={form.monto} onChange={(v) => setForm({ ...form, monto: v })} />
+          <select value={form.medioPago} onChange={(e) => setForm({ ...form, medioPago: e.target.value })} style={styles.input}>
+            <option>Efectivo</option>
+            <option>Transferencia</option>
+            <option>Tarjeta</option>
+            <option>Mercado Pago</option>
+            <option>Otro</option>
+          </select>
+          <Input placeholder="Observaciones" value={form.observaciones} onChange={(v) => setForm({ ...form, observaciones: v })} />
+        </div>
+
+        <div style={styles.actions}>
+          <Button onClick={agregarGasto}>Guardar gasto</Button>
+        </div>
+      </Panel>
+
+      <Panel title="Gastos registrados">
+        {gastos.length === 0 ? (
+          <Empty text="Todavía no hay gastos cargados." />
+        ) : (
+          gastos.map((gasto) => (
+            <Row
+              key={gasto.id}
+              left={`${formatDate(gasto.fecha)} - ${gasto.categoria} - ${gasto.concepto}${gasto.proveedor ? ` - ${gasto.proveedor}` : ""}`}
+              right={money(gasto.monto)}
+            />
+          ))
+        )}
+      </Panel>
+    </>
+  );
+}
+
+function Capacitaciones({
+  capacitaciones,
+  setCapacitaciones,
+  inscripciones,
+  setInscripciones,
+  comercioActual,
+  usuario,
+  rolUsuario,
+  recargarDatos,
+}: {
+  capacitaciones: Capacitacion[];
+  setCapacitaciones: (capacitaciones: Capacitacion[]) => void;
+  inscripciones: InscripcionCapacitacion[];
+  setInscripciones: (inscripciones: InscripcionCapacitacion[]) => void;
+  comercioActual: Comercio | null;
+  usuario: any;
+  rolUsuario: string;
+  recargarDatos: () => Promise<void>;
+}) {
+  const esSecretaria = rolUsuario === "admin_secretaria";
+
+  const [form, setForm] = useState({
+    titulo: "",
+    descripcion: "",
+    modalidad: "Presencial",
+    lugar: "",
+    fechaInicio: "",
+    fechaFin: "",
+    cupos: "",
+    destinatarios: "",
+    link: "",
+    estado: "activa",
+  });
+
+  const [inscripcionActiva, setInscripcionActiva] = useState<number | null>(null);
+  const [formInscripcion, setFormInscripcion] = useState({
+    nombre: "",
+    telefono: "",
+    observaciones: "",
+  });
+
+  async function crearCapacitacion() {
+    if (!esSecretaria) return;
+
+    if (!form.titulo) {
+      alert("Ingresá el título de la capacitación.");
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("capacitaciones")
+      .insert({
+        titulo: form.titulo,
+        descripcion: form.descripcion,
+        modalidad: form.modalidad,
+        lugar: form.lugar,
+        fecha_inicio: form.fechaInicio || null,
+        fecha_fin: form.fechaFin || null,
+        cupos: form.cupos ? Number(form.cupos) : null,
+        destinatarios: form.destinatarios,
+        link: form.link,
+        estado: form.estado,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      alert("Error al crear capacitación: " + error.message);
+      return;
+    }
+
+    setCapacitaciones([
+      ...capacitaciones,
+      {
+        id: data.id,
+        titulo: data.titulo,
+        descripcion: data.descripcion || "",
+        modalidad: data.modalidad || "",
+        lugar: data.lugar || "",
+        fechaInicio: data.fecha_inicio,
+        fechaFin: data.fecha_fin,
+        cupos: data.cupos === null ? null : Number(data.cupos),
+        destinatarios: data.destinatarios || "",
+        link: data.link || "",
+        estado: data.estado || "activa",
+        createdAt: data.created_at,
+      },
+    ]);
+
+    setForm({
+      titulo: "",
+      descripcion: "",
+      modalidad: "Presencial",
+      lugar: "",
+      fechaInicio: "",
+      fechaFin: "",
+      cupos: "",
+      destinatarios: "",
+      link: "",
+      estado: "activa",
+    });
+
+    await recargarDatos();
+  }
+
+  async function cambiarEstadoCapacitacion(capacitacion: Capacitacion, estado: string) {
+    if (!esSecretaria) return;
+
+    const { data, error } = await supabase
+      .from("capacitaciones")
+      .update({ estado })
+      .eq("id", capacitacion.id)
+      .select()
+      .single();
+
+    if (error) {
+      alert("Error al cambiar estado: " + error.message);
+      return;
+    }
+
+    setCapacitaciones(
+      capacitaciones.map((c) =>
+        c.id === capacitacion.id
+          ? {
+              ...c,
+              estado: data.estado || estado,
+            }
+          : c
+      )
+    );
+  }
+
+  async function inscribirse(capacitacion: Capacitacion) {
+    if (!usuario || !comercioActual) {
+      alert("No hay usuario o comercio asociado.");
+      return;
+    }
+
+    if (!formInscripcion.nombre || !formInscripcion.telefono) {
+      alert("Completá nombre y teléfono de la persona inscripta.");
+      return;
+    }
+
+    const yaInscripto = inscripciones.some((i) => i.capacitacionId === capacitacion.id && i.comercioId === comercioActual.id);
+
+    if (yaInscripto) {
+      alert("Este comercio ya está inscripto en esta capacitación.");
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("capacitaciones_inscripciones")
+      .insert({
+        capacitacion_id: capacitacion.id,
+        user_id: usuario.id,
+        comercio_id: comercioActual.id,
+        nombre_comercio: comercioActual.nombre,
+        email_usuario: usuario.email,
+        nombre_inscripto: formInscripcion.nombre,
+        telefono_inscripto: formInscripcion.telefono,
+        observaciones: formInscripcion.observaciones,
+        estado: "inscripto",
+      })
+      .select()
+      .single();
+
+    if (error) {
+      alert("Error al inscribirse: " + error.message);
+      return;
+    }
+
+    setInscripciones([
+      {
+        id: data.id,
+        capacitacionId: data.capacitacion_id,
+        userId: data.user_id,
+        comercioId: data.comercio_id,
+        nombreComercio: data.nombre_comercio || "",
+        emailUsuario: data.email_usuario || "",
+        nombreInscripto: data.nombre_inscripto || "",
+        telefonoInscripto: data.telefono_inscripto || "",
+        observaciones: data.observaciones || "",
+        estado: data.estado || "inscripto",
+        createdAt: data.created_at,
+      },
+      ...inscripciones,
+    ]);
+
+    setInscripcionActiva(null);
+    setFormInscripcion({ nombre: "", telefono: "", observaciones: "" });
+    alert("Inscripción registrada correctamente.");
+    await recargarDatos();
+  }
+
+  const capacitacionesActivas = capacitaciones.filter((c) => c.estado !== "finalizada");
+
+  return (
+    <>
+      <Header
+        title="Capacitaciones"
+        subtitle={
+          esSecretaria
+            ? "Carga de capacitaciones e inscriptos de comercios."
+            : "Capacitaciones disponibles para comercios del distrito."
+        }
+      />
+
+      <div style={styles.cardsGrid}>
+        <Card title="Capacitaciones" value={String(capacitaciones.length)} />
+        <Card title="Activas" value={String(capacitacionesActivas.length)} />
+        <Card title="Inscripciones" value={String(inscripciones.length)} />
+        <Card title="Rol" value={esSecretaria ? "Secretaría" : "Comercio"} />
+      </div>
+
+      {esSecretaria && (
+        <Panel title="Nueva capacitación">
+          <div style={styles.formGrid}>
+            <Input placeholder="Título" value={form.titulo} onChange={(v) => setForm({ ...form, titulo: v })} />
+            <Input placeholder="Descripción" value={form.descripcion} onChange={(v) => setForm({ ...form, descripcion: v })} />
+            <select value={form.modalidad} onChange={(e) => setForm({ ...form, modalidad: e.target.value })} style={styles.input}>
+              <option>Presencial</option>
+              <option>Virtual</option>
+              <option>Mixta</option>
+            </select>
+            <Input placeholder="Lugar" value={form.lugar} onChange={(v) => setForm({ ...form, lugar: v })} />
+            <Input placeholder="Fecha de inicio" type="datetime-local" value={form.fechaInicio} onChange={(v) => setForm({ ...form, fechaInicio: v })} />
+            <Input placeholder="Fecha de fin" type="datetime-local" value={form.fechaFin} onChange={(v) => setForm({ ...form, fechaFin: v })} />
+            <Input placeholder="Cupos" type="number" value={form.cupos} onChange={(v) => setForm({ ...form, cupos: v })} />
+            <Input placeholder="Destinatarios" value={form.destinatarios} onChange={(v) => setForm({ ...form, destinatarios: v })} />
+            <Input placeholder="Link" value={form.link} onChange={(v) => setForm({ ...form, link: v })} />
+            <select value={form.estado} onChange={(e) => setForm({ ...form, estado: e.target.value })} style={styles.input}>
+              <option value="activa">Activa</option>
+              <option value="proxima">Próxima</option>
+              <option value="finalizada">Finalizada</option>
+            </select>
+          </div>
+
+          <div style={styles.actions}>
+            <Button onClick={crearCapacitacion}>Publicar capacitación</Button>
+          </div>
+        </Panel>
+      )}
+
+      <Panel title="Capacitaciones disponibles">
+        {capacitaciones.length === 0 ? (
+          <Empty text="Todavía no hay capacitaciones cargadas." />
+        ) : (
+          capacitaciones.map((capacitacion) => {
+            const inscriptos = inscripciones.filter((i) => i.capacitacionId === capacitacion.id);
+            const yaInscripto = comercioActual
+              ? inscriptos.some((i) => i.comercioId === comercioActual.id)
+              : false;
+
+            return (
+              <div key={capacitacion.id} style={styles.capacitacionCard}>
+                <div style={styles.capacitacionHeader}>
+                  <div>
+                    <h3 style={styles.capacitacionTitle}>{capacitacion.titulo}</h3>
+                    <p style={styles.text}>{capacitacion.descripcion || "Sin descripción."}</p>
+                  </div>
+                  <Badge danger={capacitacion.estado === "finalizada"}>{capacitacion.estado}</Badge>
+                </div>
+
+                <div style={styles.capacitacionMetaGrid}>
+                  <span>Modalidad: <strong>{capacitacion.modalidad || "Sin dato"}</strong></span>
+                  <span>Lugar: <strong>{capacitacion.lugar || "Sin dato"}</strong></span>
+                  <span>Inicio: <strong>{capacitacion.fechaInicio ? formatDate(capacitacion.fechaInicio) : "Sin fecha"}</strong></span>
+                  <span>Cupos: <strong>{capacitacion.cupos ?? "Sin límite"}</strong></span>
+                  <span>Inscriptos: <strong>{inscriptos.length}</strong></span>
+                  <span>Destinatarios: <strong>{capacitacion.destinatarios || "Comercios"}</strong></span>
+                </div>
+
+                {capacitacion.link && (
+                  <p style={styles.text}>Link: {capacitacion.link}</p>
+                )}
+
+                {!esSecretaria && capacitacion.estado !== "finalizada" && (
+                  <div style={styles.actions}>
+                    {yaInscripto ? (
+                      <Badge>Ya inscripto</Badge>
+                    ) : (
+                      <Button onClick={() => setInscripcionActiva(inscripcionActiva === capacitacion.id ? null : capacitacion.id)}>
+                        Inscribirme
+                      </Button>
+                    )}
+                  </div>
+                )}
+
+                {inscripcionActiva === capacitacion.id && !yaInscripto && (
+                  <div style={styles.inscriptionBox}>
+                    <div style={styles.formGridSmall}>
+                      <Input placeholder="Nombre de la persona" value={formInscripcion.nombre} onChange={(v) => setFormInscripcion({ ...formInscripcion, nombre: v })} />
+                      <Input placeholder="Teléfono" value={formInscripcion.telefono} onChange={(v) => setFormInscripcion({ ...formInscripcion, telefono: v })} />
+                      <Input placeholder="Observaciones" value={formInscripcion.observaciones} onChange={(v) => setFormInscripcion({ ...formInscripcion, observaciones: v })} />
+                    </div>
+                    <div style={styles.actions}>
+                      <Button onClick={() => inscribirse(capacitacion)}>Confirmar inscripción</Button>
+                      <SecondaryButton onClick={() => setInscripcionActiva(null)}>Cancelar</SecondaryButton>
+                    </div>
+                  </div>
+                )}
+
+                {esSecretaria && (
+                  <div style={styles.actions}>
+                    <SecondaryButton onClick={() => cambiarEstadoCapacitacion(capacitacion, capacitacion.estado === "finalizada" ? "activa" : "finalizada")}>
+                      {capacitacion.estado === "finalizada" ? "Reactivar" : "Finalizar"}
+                    </SecondaryButton>
+                  </div>
+                )}
+
+                {esSecretaria && inscriptos.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <h4 style={styles.miniTitle}>Inscriptos</h4>
+                    {inscriptos.map((inscripto) => (
+                      <Row
+                        key={inscripto.id}
+                        left={`${inscripto.nombreComercio} - ${inscripto.nombreInscripto} - ${inscripto.telefonoInscripto}`}
+                        right={formatDate(inscripto.createdAt)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
       </Panel>
     </>
@@ -1875,6 +2547,7 @@ function Reportes({
   egresosCaja,
   saldoCajaEstimado,
   historialCajas,
+  gastos,
 }: {
   ventas: Venta[];
   productos: Producto[];
@@ -1884,47 +2557,160 @@ function Reportes({
   egresosCaja: number;
   saldoCajaEstimado: number;
   historialCajas: HistorialCaja[];
+  gastos: Gasto[];
 }) {
-  const productosVendidos = useMemo(() => {
+  const ventasPorDia = useMemo(() => {
+    const mapa: Record<string, { total: number; cantidad: number }> = {};
+
+    ventas.forEach((venta) => {
+      const fecha = new Date(venta.fecha);
+      const clave = fecha.toLocaleDateString("es-AR");
+
+      if (!mapa[clave]) mapa[clave] = { total: 0, cantidad: 0 };
+
+      mapa[clave].total += venta.total;
+      mapa[clave].cantidad += 1;
+    });
+
+    return Object.entries(mapa)
+      .map(([fecha, datos]) => ({ fecha, total: datos.total, cantidad: datos.cantidad }))
+      .sort((a, b) => parseFechaAR(a.fecha).getTime() - parseFechaAR(b.fecha).getTime());
+  }, [ventas]);
+
+  const ventasPorMes = useMemo(() => {
     const mapa: Record<string, number> = {};
 
     ventas.forEach((venta) => {
+      const fecha = new Date(venta.fecha);
+      const clave = `${fecha.getMonth() + 1}/${fecha.getFullYear()}`;
+      mapa[clave] = (mapa[clave] || 0) + venta.total;
+    });
+
+    return Object.entries(mapa)
+      .map(([mes, total]) => ({ mes, total }))
+      .sort((a, b) => {
+        const [mesA, anioA] = a.mes.split("/").map(Number);
+        const [mesB, anioB] = b.mes.split("/").map(Number);
+        return new Date(anioA, mesA - 1, 1).getTime() - new Date(anioB, mesB - 1, 1).getTime();
+      });
+  }, [ventas]);
+
+  const productosVendidos = useMemo(() => {
+    const mapa: Record<string, { cantidad: number; total: number }> = {};
+
+    ventas.forEach((venta) => {
       venta.items.forEach((item) => {
-        mapa[item.nombre] = (mapa[item.nombre] || 0) + item.cantidad;
+        if (!mapa[item.nombre]) mapa[item.nombre] = { cantidad: 0, total: 0 };
+        mapa[item.nombre].cantidad += item.cantidad;
+        mapa[item.nombre].total += item.subtotal;
       });
     });
 
     return Object.entries(mapa)
-      .map(([nombre, cantidad]) => ({ nombre, cantidad }))
+      .map(([nombre, datos]) => ({ nombre, cantidad: datos.cantidad, total: datos.total }))
       .sort((a, b) => b.cantidad - a.cantidad);
   }, [ventas]);
 
-  const margenEstimado = ventas.reduce((acc, venta) => {
-    const margenVenta = venta.items.reduce((total, item) => {
+  const ventasPorMedioPago = useMemo(() => {
+    const mapa: Record<string, number> = {};
+    ventas.forEach((venta) => {
+      mapa[venta.medioPago] = (mapa[venta.medioPago] || 0) + venta.total;
+    });
+    return Object.entries(mapa).map(([medio, total]) => ({ medio, total })).sort((a, b) => b.total - a.total);
+  }, [ventas]);
+
+  const ventasPorDiaSemana = useMemo(() => {
+    const mapa: Record<string, number> = {};
+    ventas.forEach((venta) => {
+      const dia = new Date(venta.fecha).toLocaleDateString("es-AR", { weekday: "long" });
+      mapa[dia] = (mapa[dia] || 0) + venta.total;
+    });
+    return Object.entries(mapa).map(([dia, total]) => ({ dia, total })).sort((a, b) => b.total - a.total);
+  }, [ventas]);
+
+  const costoMercaderiaVendida = ventas.reduce((acc, venta) => {
+    return acc + venta.items.reduce((total, item) => {
       const producto = productos.find((p) => p.id === item.productoId);
       if (!producto) return total;
-      return total + (item.precioUnitario - producto.costo) * item.cantidad;
+      return total + producto.costo * item.cantidad;
     }, 0);
-
-    return acc + margenVenta;
   }, 0);
+
+  const margenBruto = ventasDelDia - costoMercaderiaVendida;
+  const totalGastos = gastos.reduce((acc, gasto) => acc + gasto.monto, 0);
+  const resultadoEstimado = margenBruto - totalGastos;
+  const ticketPromedio = ventas.length > 0 ? ventasDelDia / ventas.length : 0;
+  const totalUltimos7Dias = ventasPorDia.slice(-7).reduce((acc, dia) => acc + dia.total, 0);
+  const promedioDiario = ventasPorDia.length > 0 ? ventasDelDia / ventasPorDia.length : 0;
+  const mejorDia = ventasPorDia.reduce((mejor, dia) => (dia.total > mejor.total ? dia : mejor), { fecha: "Sin datos", total: 0, cantidad: 0 });
+
+  const idsVendidos = new Set(ventas.flatMap((venta) => venta.items.map((item) => item.productoId)));
+  const productosSinVentas = productos.filter((producto) => producto.activo && !idsVendidos.has(producto.id));
+  const productosFaltantes = productos.filter((producto) => producto.activo && producto.stock <= 0);
+
+  const rotacion = productos
+    .map((producto) => {
+      const vendido = ventas.reduce((acc, venta) => {
+        return acc + venta.items.filter((item) => item.productoId === producto.id).reduce((t, item) => t + item.cantidad, 0);
+      }, 0);
+      return { nombre: producto.nombre, vendido, stock: producto.stock };
+    })
+    .filter((producto) => producto.vendido > 0)
+    .sort((a, b) => b.vendido - a.vendido);
+
+  const maxVentaDiaria = Math.max(...ventasPorDia.map((dia) => dia.total), 0);
+  const maxMes = Math.max(...ventasPorMes.map((mes) => mes.total), 0);
+  const maxMedioPago = Math.max(...ventasPorMedioPago.map((m) => m.total), 0);
+  const maxDiaSemana = Math.max(...ventasPorDiaSemana.map((d) => d.total), 0);
 
   return (
     <>
-      <Header title="Reportes" subtitle="Indicadores básicos del comercio." />
+      <Header title="Reportes" subtitle="Ventas, stock, margen, gastos y flujo de caja." />
 
       <div style={styles.cardsGrid}>
         <Card title="Ventas totales" value={money(ventasDelDia)} />
-        <Card title="Cantidad de ventas" value={String(ventas.length)} />
-        <Card title="Margen estimado" value={money(margenEstimado)} />
-        <Card title="Cajas cerradas" value={String(historialCajas.length)} />
+        <Card title="Ticket promedio" value={money(ticketPromedio)} />
+        <Card title="Margen bruto" value={money(margenBruto)} />
+        <Card title="Resultado estimado" value={money(resultadoEstimado)} />
       </div>
 
       <div style={styles.cardsGrid}>
-        <Card title="Stock bajo" value={String(productosStockBajo.length)} />
-        <Card title="Ingresos caja actual" value={money(ingresosCaja)} />
-        <Card title="Egresos caja actual" value={money(egresosCaja)} />
-        <Card title="Saldo caja actual" value={money(saldoCajaEstimado)} />
+        <Card title="Ventas últimos 7 días" value={money(totalUltimos7Dias)} />
+        <Card title="Promedio diario" value={money(promedioDiario)} />
+        <Card title="Gastos cargados" value={money(totalGastos)} />
+        <Card title="Mejor día" value={mejorDia.fecha} />
+      </div>
+
+      <div style={styles.twoColumns}>
+        <Panel title="Ventas diarias">
+          {ventasPorDia.length === 0 ? <Empty text="Todavía no hay ventas para graficar." /> : ventasPorDia.map((dia) => {
+            const ancho = maxVentaDiaria > 0 ? Math.max((dia.total / maxVentaDiaria) * 100, 4) : 0;
+            return <ChartRow key={dia.fecha} label={dia.fecha} value={money(dia.total)} width={ancho} />;
+          })}
+        </Panel>
+
+        <Panel title="Comparación entre meses">
+          {ventasPorMes.length === 0 ? <Empty text="Todavía no hay meses para comparar." /> : ventasPorMes.map((mes) => {
+            const ancho = maxMes > 0 ? Math.max((mes.total / maxMes) * 100, 4) : 0;
+            return <ChartRow key={mes.mes} label={mes.mes} value={money(mes.total)} width={ancho} />;
+          })}
+        </Panel>
+      </div>
+
+      <div style={styles.twoColumns}>
+        <Panel title="Días con más ventas">
+          {ventasPorDiaSemana.length === 0 ? <Empty text="Todavía no hay ventas registradas." /> : ventasPorDiaSemana.map((dia) => {
+            const ancho = maxDiaSemana > 0 ? Math.max((dia.total / maxDiaSemana) * 100, 4) : 0;
+            return <ChartRow key={dia.dia} label={dia.dia} value={money(dia.total)} width={ancho} />;
+          })}
+        </Panel>
+
+        <Panel title="Ventas por medio de pago">
+          {ventasPorMedioPago.length === 0 ? <Empty text="Todavía no hay medios de pago registrados." /> : ventasPorMedioPago.map((medio) => {
+            const ancho = maxMedioPago > 0 ? Math.max((medio.total / maxMedioPago) * 100, 4) : 0;
+            return <ChartRow key={medio.medio} label={medio.medio} value={money(medio.total)} width={ancho} />;
+          })}
+        </Panel>
       </div>
 
       <div style={styles.twoColumns}>
@@ -1932,20 +2718,46 @@ function Reportes({
           {productosVendidos.length === 0 ? (
             <Empty text="Todavía no hay productos vendidos." />
           ) : (
-            productosVendidos.map((p) => (
-              <Row key={p.nombre} left={p.nombre} right={`${p.cantidad} unidades`} />
+            productosVendidos.slice(0, 10).map((p) => (
+              <Row key={p.nombre} left={p.nombre} right={`${p.cantidad} unidades / ${money(p.total)}`} />
             ))
           )}
         </Panel>
 
-        <Panel title="Productos con stock bajo">
-          {productosStockBajo.length === 0 ? (
-            <Empty text="No hay productos con stock bajo." />
+        <Panel title="Rotación de mercadería">
+          {rotacion.length === 0 ? (
+            <Empty text="Todavía no hay rotación calculable." />
           ) : (
-            productosStockBajo.map((p) => (
-              <Row key={p.id} left={p.nombre} right={`Stock: ${p.stock}`} />
+            rotacion.slice(0, 10).map((p) => (
+              <Row key={p.nombre} left={p.nombre} right={`Vendidas: ${p.vendido} / Stock: ${p.stock}`} />
             ))
           )}
+        </Panel>
+      </div>
+
+      <div style={styles.twoColumns}>
+        <Panel title="Productos y stock">
+          <Row left="Stock disponible total" right={`${productos.reduce((acc, p) => acc + p.stock, 0)} unidades`} />
+          <Row left="Productos con poco stock" right={String(productosStockBajo.length)} />
+          <Row left="Productos faltantes" right={String(productosFaltantes.length)} />
+          <Row left="Productos sin ventas" right={String(productosSinVentas.length)} />
+        </Panel>
+
+        <Panel title="Finanzas y flujo de caja">
+          <Row left="Ingresos por ventas" right={money(ventasDelDia)} />
+          <Row left="Costos estimados de mercadería" right={money(costoMercaderiaVendida)} />
+          <Row left="Gastos del negocio" right={money(totalGastos)} />
+          <Row left="Flujo de caja actual" right={money(saldoCajaEstimado)} bold />
+        </Panel>
+      </div>
+
+      <div style={styles.twoColumns}>
+        <Panel title="Productos con stock bajo">
+          {productosStockBajo.length === 0 ? <Empty text="No hay productos con stock bajo." /> : productosStockBajo.map((p) => <Row key={p.id} left={p.nombre} right={`Stock: ${p.stock}`} />)}
+        </Panel>
+
+        <Panel title="Productos sin ventas">
+          {productosSinVentas.length === 0 ? <Empty text="No hay productos sin ventas." /> : productosSinVentas.slice(0, 10).map((p) => <Row key={p.id} left={p.nombre} right={`Stock: ${p.stock}`} />)}
         </Panel>
       </div>
     </>
@@ -2081,8 +2893,27 @@ function Row({
   );
 }
 
+function ChartRow({ label, value, width }: { label: string; value: string; width: number }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={styles.chartLabel}>
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </div>
+      <div style={styles.chartTrack}>
+        <div style={{ ...styles.chartBar, width: `${width}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function Empty({ text }: { text: string }) {
   return <p style={styles.empty}>{text}</p>;
+}
+
+function parseFechaAR(fecha: string) {
+  const [dia, mes, anio] = fecha.split("/").map(Number);
+  return new Date(anio, mes - 1, dia);
 }
 
 function money(value: number) {
@@ -2101,90 +2932,162 @@ function formatDate(value: string) {
 const styles: Record<string, React.CSSProperties> = {
   main: {
     minHeight: "100vh",
-    background: "linear-gradient(135deg, #eef2ff 0%, #f8fafc 45%, #ecfeff 100%)",
-    fontFamily: "Inter, Arial, sans-serif",
+    background:
+      "radial-gradient(circle at top left, rgba(239,68,68,0.18), transparent 30%), radial-gradient(circle at bottom right, rgba(127,29,29,0.18), transparent 32%), linear-gradient(135deg, #fff7f7 0%, #f8fafc 52%, #fee2e2 100%)",
+    fontFamily:
+      'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
   loginMain: {
     minHeight: "100vh",
-    background: "linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #0f766e 100%)",
+    background:
+      "radial-gradient(circle at 20% 20%, rgba(239,68,68,0.38), transparent 28%), radial-gradient(circle at 80% 70%, rgba(127,29,29,0.45), transparent 32%), linear-gradient(135deg, #020617 0%, #111827 45%, #450a0a 100%)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontFamily: "Inter, Arial, sans-serif",
+    fontFamily:
+      'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     padding: 24,
   },
   loginBox: {
-    width: 440,
-    background: "rgba(255,255,255,0.96)",
-    padding: 36,
-    borderRadius: 24,
-    boxShadow: "0 24px 60px rgba(15, 23, 42, 0.35)",
-    border: "1px solid rgba(255,255,255,0.6)",
+    width: 470,
+    background: "rgba(15, 23, 42, 0.78)",
+    padding: 40,
+    borderRadius: 30,
+    boxShadow: "0 30px 90px rgba(0, 0, 0, 0.48)",
+    border: "1px solid rgba(248, 113, 113, 0.32)",
+    backdropFilter: "blur(16px)",
   },
   loginTitle: {
-    fontSize: 28,
-    lineHeight: 1.15,
-    color: "#0f172a",
+    fontSize: 31,
+    lineHeight: 1.1,
+    color: "#fff1f2",
     margin: 0,
-    fontWeight: 800,
-    letterSpacing: "-0.03em",
+    fontWeight: 950,
+    letterSpacing: "-0.05em",
   },
   loginText: {
-    color: "#64748b",
-    marginTop: 10,
+    color: "#fecaca",
+    marginTop: 12,
     marginBottom: 26,
-    lineHeight: 1.5,
+    lineHeight: 1.55,
+    fontSize: 15,
   },
   layout: {
     display: "flex",
     minHeight: "100vh",
   },
   sidebar: {
-    width: 260,
-    background: "linear-gradient(180deg, #0f172a 0%, #111827 55%, #020617 100%)",
+    width: 292,
+    background:
+      "linear-gradient(180deg, #020617 0%, #111827 42%, #450a0a 100%)",
     color: "white",
     padding: 24,
     flexShrink: 0,
-    boxShadow: "8px 0 24px rgba(15, 23, 42, 0.12)",
+    boxShadow: "14px 0 42px rgba(15, 23, 42, 0.22)",
+    borderRight: "1px solid rgba(248, 113, 113, 0.18)",
+    position: "relative",
+    overflow: "hidden",
+  },
+  sidebarGlow: {
+    position: "absolute",
+    width: 180,
+    height: 180,
+    right: -70,
+    top: -40,
+    background: "radial-gradient(circle, rgba(239,68,68,0.38), transparent 64%)",
+    pointerEvents: "none",
+  },
+  sidebarHeaderBox: {
+    position: "relative",
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(248, 113, 113, 0.22)",
+    borderRadius: 22,
+    padding: 18,
+    boxShadow: "0 18px 42px rgba(0,0,0,0.24)",
+  },
+  logoKicker: {
+    color: "#fca5a5",
+    textTransform: "uppercase",
+    letterSpacing: "0.12em",
+    fontSize: 11,
+    fontWeight: 900,
+    margin: 0,
   },
   logo: {
     fontSize: 24,
-    margin: 0,
-    fontWeight: 800,
-    letterSpacing: "-0.03em",
+    margin: "8px 0 0",
+    fontWeight: 950,
+    letterSpacing: "-0.05em",
+    lineHeight: 1.12,
   },
   logoSub: {
-    color: "#94a3b8",
-    fontSize: 14,
-    marginTop: 6,
+    color: "#fca5a5",
+    fontSize: 13,
+    marginTop: 8,
+    fontWeight: 700,
+  },
+  rolePill: {
+    display: "inline-block",
+    marginTop: 12,
+    background: "rgba(239, 68, 68, 0.18)",
+    color: "#fecaca",
+    border: "1px solid rgba(248, 113, 113, 0.34)",
+    padding: "6px 10px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 900,
+  },
+  sidebarEmail: {
+    position: "relative",
+    color: "#cbd5e1",
+    fontSize: 12,
+    marginTop: 14,
+    wordBreak: "break-word",
+  },
+  navGroupTitle: {
+    color: "#fca5a5",
+    fontSize: 11,
+    fontWeight: 950,
+    textTransform: "uppercase",
+    letterSpacing: "0.13em",
+    margin: "0 0 8px 4px",
+  },
+  navIcon: {
+    width: 25,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 8,
+    fontWeight: 950,
   },
   navItem: {
-    display: "block",
+    display: "flex",
+    alignItems: "center",
     width: "100%",
-    border: "none",
+    border: "1px solid transparent",
     textAlign: "left",
     padding: "13px 14px",
-    borderRadius: 12,
+    borderRadius: 16,
     marginBottom: 8,
     cursor: "pointer",
     fontSize: 15,
-    fontWeight: 600,
-    transition: "all 0.2s ease",
+    fontWeight: 850,
+    transition: "all 0.18s ease",
   },
   logoutButton: {
-    marginTop: 24,
+    marginTop: 22,
     width: "100%",
-    background: "#334155",
+    background: "rgba(127, 29, 29, 0.56)",
     color: "white",
-    border: "none",
-    padding: "11px",
-    borderRadius: 12,
+    border: "1px solid rgba(248, 113, 113, 0.24)",
+    padding: "12px",
+    borderRadius: 16,
     cursor: "pointer",
-    fontWeight: 700,
+    fontWeight: 900,
   },
   content: {
     flex: 1,
-    padding: 34,
+    padding: 36,
     overflow: "auto",
   },
   header: {
@@ -2195,77 +3098,94 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 16,
   },
   title: {
-    fontSize: 34,
-    color: "#0f172a",
+    fontSize: 37,
+    color: "#111827",
     margin: 0,
-    fontWeight: 800,
-    letterSpacing: "-0.04em",
+    fontWeight: 950,
+    letterSpacing: "-0.055em",
+    lineHeight: 1.06,
   },
   subtitle: {
     color: "#64748b",
-    marginTop: 8,
+    marginTop: 9,
     fontSize: 15,
+    lineHeight: 1.5,
   },
   cardsGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
     gap: 18,
     marginBottom: 24,
   },
   card: {
-    background: "rgba(255,255,255,0.92)",
+    background: "rgba(255,255,255,0.96)",
     padding: 22,
-    borderRadius: 22,
-    boxShadow: "0 12px 30px rgba(15, 23, 42, 0.08)",
-    border: "1px solid rgba(226, 232, 240, 0.9)",
-    minHeight: 92,
+    borderRadius: 26,
+    boxShadow: "0 16px 42px rgba(127, 29, 29, 0.09)",
+    border: "1px solid rgba(254, 202, 202, 0.96)",
+    minHeight: 98,
+    position: "relative",
+    overflow: "hidden",
   },
   cardTitle: {
-    color: "#64748b",
-    fontSize: 13,
+    color: "#7f1d1d",
+    fontSize: 12,
     margin: 0,
-    fontWeight: 700,
+    fontWeight: 950,
     textTransform: "uppercase",
-    letterSpacing: "0.04em",
+    letterSpacing: "0.08em",
   },
   cardValue: {
     color: "#0f172a",
-    fontSize: 25,
-    fontWeight: 800,
-    margin: "10px 0 0",
+    fontSize: 26,
+    fontWeight: 950,
+    margin: "12px 0 0",
     wordBreak: "break-word",
-    letterSpacing: "-0.03em",
+    letterSpacing: "-0.045em",
+    lineHeight: 1.15,
   },
   twoColumns: {
     display: "grid",
-    gridTemplateColumns: "1fr 1fr",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
     gap: 18,
     marginBottom: 24,
   },
   panel: {
-    background: "rgba(255,255,255,0.94)",
+    background: "rgba(255,255,255,0.97)",
     padding: 26,
-    borderRadius: 22,
-    boxShadow: "0 12px 30px rgba(15, 23, 42, 0.08)",
-    border: "1px solid rgba(226, 232, 240, 0.9)",
+    borderRadius: 26,
+    boxShadow: "0 16px 42px rgba(127, 29, 29, 0.09)",
+    border: "1px solid rgba(254, 202, 202, 0.96)",
     marginBottom: 24,
   },
   panelTitle: {
-    color: "#0f172a",
+    color: "#111827",
     margin: 0,
     fontSize: 20,
-    fontWeight: 800,
-    letterSpacing: "-0.02em",
+    fontWeight: 950,
+    letterSpacing: "-0.03em",
+  },
+  miniTitle: {
+    color: "#7f1d1d",
+    margin: "0 0 8px",
+    fontSize: 14,
+    fontWeight: 950,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
   },
   text: {
     color: "#475569",
-    lineHeight: 1.55,
+    lineHeight: 1.6,
     fontSize: 15,
   },
   empty: {
     color: "#64748b",
     margin: 0,
     fontSize: 15,
+    background: "#fff7f7",
+    border: "1px dashed #fca5a5",
+    borderRadius: 16,
+    padding: "14px 16px",
   },
   row: {
     display: "flex",
@@ -2273,93 +3193,94 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: 16,
     padding: "13px 0",
-    borderBottom: "1px solid #e2e8f0",
+    borderBottom: "1px solid #fee2e2",
     color: "#0f172a",
     fontSize: 14,
   },
   formGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
     gap: 14,
   },
   formGridSmall: {
     display: "grid",
-    gridTemplateColumns: "repeat(3, 1fr)",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
     gap: 14,
     alignItems: "center",
   },
   input: {
-    border: "1px solid #cbd5e1",
-    borderRadius: 12,
+    border: "1px solid #fecaca",
+    borderRadius: 15,
     padding: "12px 14px",
     fontSize: 14,
     width: "100%",
     boxSizing: "border-box",
-    background: "white",
+    background: "#ffffff",
     color: "#0f172a",
     outline: "none",
-    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
+    boxShadow: "0 1px 2px rgba(127, 29, 29, 0.05)",
   },
   actions: {
     display: "flex",
     gap: 12,
     marginTop: 20,
+    flexWrap: "wrap",
   },
   button: {
-    background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+    background: "linear-gradient(135deg, #ef4444 0%, #991b1b 100%)",
     color: "white",
     border: "none",
     padding: "12px 18px",
-    borderRadius: 12,
-    fontWeight: 800,
+    borderRadius: 15,
+    fontWeight: 950,
     cursor: "pointer",
-    boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)",
+    boxShadow: "0 12px 26px rgba(153, 27, 27, 0.28)",
   },
   secondaryButton: {
-    background: "#e2e8f0",
-    color: "#0f172a",
-    border: "none",
+    background: "#fee2e2",
+    color: "#7f1d1d",
+    border: "1px solid #fecaca",
     padding: "12px 18px",
-    borderRadius: 12,
-    fontWeight: 800,
+    borderRadius: 15,
+    fontWeight: 950,
     cursor: "pointer",
   },
   smallButton: {
     border: "none",
-    borderRadius: 10,
-    padding: "8px 10px",
+    borderRadius: 12,
+    padding: "8px 11px",
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 950,
     cursor: "pointer",
-    background: "#e0f2fe",
-    color: "#075985",
+    background: "#fee2e2",
+    color: "#7f1d1d",
   },
   tableWrapper: {
-    background: "rgba(255,255,255,0.96)",
-    borderRadius: 22,
-    boxShadow: "0 12px 30px rgba(15, 23, 42, 0.08)",
-    border: "1px solid rgba(226, 232, 240, 0.9)",
-    overflow: "hidden",
+    background: "rgba(255,255,255,0.98)",
+    borderRadius: 26,
+    boxShadow: "0 16px 42px rgba(127, 29, 29, 0.09)",
+    border: "1px solid rgba(254, 202, 202, 0.96)",
+    overflow: "auto",
   },
   table: {
     width: "100%",
     borderCollapse: "collapse",
   },
   thead: {
-    background: "#f8fafc",
+    background: "#fff7f7",
   },
   tr: {
-    borderTop: "1px solid #e2e8f0",
+    borderTop: "1px solid #fee2e2",
   },
   th: {
     textAlign: "left",
     padding: "15px 18px",
     fontSize: 12,
-    color: "#475569",
+    color: "#7f1d1d",
     textTransform: "uppercase",
     whiteSpace: "nowrap",
-    letterSpacing: "0.05em",
-    fontWeight: 800,
+    letterSpacing: "0.075em",
+    fontWeight: 950,
   },
   td: {
     padding: "17px 18px",
@@ -2371,11 +3292,68 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "7px 11px",
     borderRadius: 999,
     fontSize: 12,
-    fontWeight: 800,
+    fontWeight: 950,
+  },
+  chartLabel: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 7,
+    color: "#0f172a",
+    fontSize: 14,
+  },
+  chartTrack: {
+    width: "100%",
+    height: 13,
+    background: "#fee2e2",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  chartBar: {
+    height: "100%",
+    background: "linear-gradient(135deg, #ef4444 0%, #7f1d1d 100%)",
+    borderRadius: 999,
+    boxShadow: "0 6px 16px rgba(153, 27, 27, 0.20)",
+  },
+  capacitacionCard: {
+    border: "1px solid #fecaca",
+    borderRadius: 22,
+    padding: 18,
+    marginBottom: 18,
+    background: "linear-gradient(135deg, #ffffff 0%, #fff7f7 100%)",
+    boxShadow: "0 12px 28px rgba(127,29,29,0.07)",
+  },
+  capacitacionHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 16,
+    alignItems: "flex-start",
+  },
+  capacitacionTitle: {
+    margin: 0,
+    color: "#111827",
+    fontSize: 21,
+    fontWeight: 950,
+    letterSpacing: "-0.035em",
+  },
+  capacitacionMetaGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: 10,
+    marginTop: 14,
+    color: "#475569",
+    fontSize: 14,
+  },
+  inscriptionBox: {
+    marginTop: 16,
+    padding: 16,
+    borderRadius: 18,
+    background: "#fff7f7",
+    border: "1px solid #fecaca",
   },
   hr: {
     border: "none",
-    borderTop: "1px solid #e2e8f0",
+    borderTop: "1px solid #fee2e2",
     margin: "14px 0",
   },
 };

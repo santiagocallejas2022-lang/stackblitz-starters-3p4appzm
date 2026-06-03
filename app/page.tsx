@@ -5,6 +5,7 @@ import { supabase } from "../lib/supabase";
 
 type Seccion =
   | "inicio"
+  | "miComercio"
   | "productos"
   | "ventas"
   | "caja"
@@ -55,6 +56,7 @@ type Venta = {
   id: number;
   comercioId: number;
   fecha: string;
+  clienteId: number | null;
   cliente: string;
   medioPago: string;
   total: number;
@@ -376,6 +378,7 @@ export default function Home() {
         id: v.id,
         comercioId: v.comercio_id,
         fecha: v.fecha,
+        clienteId: v.cliente_id || null,
         cliente: v.cliente_nombre,
         medioPago: v.medio_pago,
         total: Number(v.total),
@@ -836,6 +839,13 @@ export default function Home() {
             />
           )}
 
+          {seccion === "miComercio" && (
+            <MiComercio
+              comercioActual={comercioActual}
+              setComercioActual={setComercioActual}
+            />
+          )}
+
           {seccion === "productos" && (
             <Productos
               productos={productos}
@@ -877,6 +887,7 @@ export default function Home() {
               clientes={clientes}
               setClientes={setClientes}
               comercioActual={comercioActual}
+              ventas={ventas}
             />
           )}
 
@@ -913,11 +924,103 @@ export default function Home() {
               saldoCajaEstimado={saldoCajaEstimado}
               historialCajas={historialCajas}
               gastos={gastos}
+              clientes={clientes}
             />
           )}
         </section>
       </div>
     </main>
+  );
+}
+
+function MiComercio({
+  comercioActual,
+  setComercioActual,
+}: {
+  comercioActual: Comercio | null;
+  setComercioActual: React.Dispatch<React.SetStateAction<Comercio | null>>;
+}) {
+  const [nombre, setNombre] = useState(comercioActual?.nombre || "");
+  const [rubro, setRubro] = useState(comercioActual?.rubro || "");
+  const [direccion, setDireccion] = useState(comercioActual?.direccion || "");
+  const [telefono, setTelefono] = useState(comercioActual?.telefono || "");
+  const [email, setEmail] = useState(comercioActual?.email || "");
+
+  useEffect(() => {
+    setNombre(comercioActual?.nombre || "");
+    setRubro(comercioActual?.rubro || "");
+    setDireccion(comercioActual?.direccion || "");
+    setTelefono(comercioActual?.telefono || "");
+    setEmail(comercioActual?.email || "");
+  }, [comercioActual]);
+
+  async function guardarDatosComercio() {
+    if (!comercioActual) {
+      alert("No hay comercio asociado.");
+      return;
+    }
+
+    if (!nombre) {
+      alert("El nombre del comercio es obligatorio.");
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("comercios")
+      .update({
+        nombre,
+        rubro,
+        direccion,
+        telefono,
+        email,
+      })
+      .eq("id", comercioActual.id)
+      .select()
+      .single();
+
+    if (error) {
+      alert("Error al actualizar el comercio: " + error.message);
+      return;
+    }
+
+    setComercioActual({
+      id: data.id,
+      nombre: data.nombre,
+      rubro: data.rubro || "",
+      direccion: data.direccion || "",
+      telefono: data.telefono || "",
+      email: data.email || "",
+      estado: data.estado || "activo",
+    });
+
+    alert("Datos del comercio actualizados.");
+  }
+
+  return (
+    <>
+      <Header
+        title="Mi comercio"
+        subtitle="Datos principales del comercio. Estos datos ayudan a identificar la cuenta y mejorar la gestión."
+      />
+
+      <Panel title="Datos del comercio">
+        <div style={styles.formGridSmall}>
+          <Input placeholder="Nombre del comercio" value={nombre} onChange={setNombre} />
+          <Input placeholder="Rubro" value={rubro} onChange={setRubro} />
+          <Input placeholder="Teléfono / WhatsApp" value={telefono} onChange={setTelefono} />
+          <Input placeholder="Dirección" value={direccion} onChange={setDireccion} />
+          <Input placeholder="Email de contacto" value={email} onChange={setEmail} />
+          <Button onClick={guardarDatosComercio}>Guardar datos</Button>
+        </div>
+      </Panel>
+
+      <Panel title="Resumen de cuenta">
+        <Row left="Comercio" right={comercioActual?.nombre || "Sin nombre"} />
+        <Row left="Rubro" right={comercioActual?.rubro || "Sin rubro"} />
+        <Row left="Teléfono" right={comercioActual?.telefono || "Sin teléfono"} />
+        <Row left="Estado" right={comercioActual?.estado || "activo"} />
+      </Panel>
+    </>
   );
 }
 
@@ -940,7 +1043,8 @@ function Sidebar({
     {
       titulo: "Gestión",
       items: [
-        { id: "inicio", label: "Inicio", icono: "◇" },
+        { id: "inicio", label: "Inicio", icono: "◆" },
+        { id: "miComercio", label: "Mi comercio", icono: "◎" },
         { id: "productos", label: "Productos", icono: "▦" },
         { id: "clientes", label: "Clientes", icono: "◉" },
       ],
@@ -991,7 +1095,7 @@ function Sidebar({
                   style={{
                     ...styles.navItem,
                     background: activo
-                      ? "linear-gradient(135deg, rgba(239,68,68,0.92), rgba(127,29,29,0.94))"
+                      ? "linear-gradient(135deg, rgba(220,38,38,0.98), rgba(127,29,29,0.94))"
                       : "rgba(15, 23, 42, 0.24)",
                     color: activo ? "white" : "#cbd5e1",
                     borderColor: activo ? "rgba(248, 113, 113, 0.75)" : "rgba(148, 163, 184, 0.12)",
@@ -1444,13 +1548,52 @@ function Clientes({
   clientes,
   setClientes,
   comercioActual,
+  ventas,
 }: {
   clientes: Cliente[];
   setClientes: (clientes: Cliente[]) => void;
   comercioActual: Comercio | null;
+  ventas: Venta[];
 }) {
   const [nombre, setNombre] = useState("");
   const [telefono, setTelefono] = useState("");
+  const [clienteEditando, setClienteEditando] = useState<Cliente | null>(null);
+  const [clienteHistorialId, setClienteHistorialId] = useState<number | null>(null);
+
+  function ventasDelCliente(cliente: Cliente) {
+    return ventas.filter((venta) => {
+      if (venta.clienteId) return venta.clienteId === cliente.id;
+      return venta.cliente === cliente.nombre;
+    });
+  }
+
+  function estadisticasCliente(cliente: Cliente) {
+    const historial = ventasDelCliente(cliente);
+    const totalGastado = historial.reduce((acc, venta) => acc + venta.total, 0);
+    const ticketPromedio = historial.length > 0 ? totalGastado / historial.length : 0;
+    const ultimaCompra = historial
+      .slice()
+      .sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())[0];
+
+    return {
+      historial,
+      totalGastado,
+      ticketPromedio,
+      ultimaCompra,
+    };
+  }
+
+  function limpiarFormulario() {
+    setNombre("");
+    setTelefono("");
+    setClienteEditando(null);
+  }
+
+  function iniciarEdicion(cliente: Cliente) {
+    setClienteEditando(cliente);
+    setNombre(cliente.nombre);
+    setTelefono(cliente.telefono || "");
+  }
 
   async function agregarCliente() {
     if (!comercioActual) {
@@ -1488,29 +1631,134 @@ function Clientes({
       },
     ]);
 
-    setNombre("");
-    setTelefono("");
+    limpiarFormulario();
+  }
+
+  async function guardarCambiosCliente() {
+    if (!comercioActual || !clienteEditando) {
+      alert("No hay cliente seleccionado.");
+      return;
+    }
+
+    if (!nombre) {
+      alert("Ingresá el nombre del cliente.");
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("clientes")
+      .update({ nombre, telefono })
+      .eq("id", clienteEditando.id)
+      .eq("comercio_id", comercioActual.id)
+      .select()
+      .single();
+
+    if (error) {
+      alert("Error al editar cliente: " + error.message);
+      return;
+    }
+
+    const clienteActualizado: Cliente = {
+      id: data.id,
+      comercioId: data.comercio_id,
+      nombre: data.nombre,
+      telefono: data.telefono || "",
+    };
+
+    setClientes(clientes.map((cliente) => cliente.id === clienteActualizado.id ? clienteActualizado : cliente));
+    limpiarFormulario();
   }
 
   return (
     <>
-      <Header title="Clientes" subtitle="Base simple de clientes." />
+      <Header
+        title="Clientes"
+        subtitle="Clientes frecuentes, edición de datos e historial de compras."
+      />
 
-      <Panel title="Nuevo cliente">
+      <Panel title={clienteEditando ? "Editar cliente" : "Nuevo cliente"}>
         <div style={styles.formGridSmall}>
           <Input placeholder="Nombre" value={nombre} onChange={setNombre} />
           <Input placeholder="Teléfono" value={telefono} onChange={setTelefono} />
-          <Button onClick={agregarCliente}>Guardar cliente</Button>
+          {clienteEditando ? (
+            <Button onClick={guardarCambiosCliente}>Guardar cambios</Button>
+          ) : (
+            <Button onClick={agregarCliente}>Guardar cliente</Button>
+          )}
         </div>
+
+        {clienteEditando && (
+          <div style={styles.actions}>
+            <SecondaryButton onClick={limpiarFormulario}>Cancelar edición</SecondaryButton>
+          </div>
+        )}
       </Panel>
 
       <Panel title="Clientes registrados">
         {clientes.length === 0 ? (
           <Empty text="Todavía no hay clientes registrados." />
         ) : (
-          clientes.map((cliente) => (
-            <Row key={cliente.id} left={cliente.nombre} right={cliente.telefono || "Sin teléfono"} />
-          ))
+          clientes.map((cliente) => {
+            const stats = estadisticasCliente(cliente);
+            const mostrarHistorial = clienteHistorialId === cliente.id;
+
+            return (
+              <div key={cliente.id} style={styles.clientCard}>
+                <div style={styles.clientHeader}>
+                  <div>
+                    <h4 style={styles.clientName}>{cliente.nombre}</h4>
+                    <p style={styles.clientMeta}>{cliente.telefono || "Sin teléfono"}</p>
+                  </div>
+                  <div style={styles.clientActions}>
+                    <button style={styles.smallButton} onClick={() => iniciarEdicion(cliente)}>
+                      Editar
+                    </button>
+                    <button
+                      style={styles.smallButtonAlt}
+                      onClick={() => setClienteHistorialId(mostrarHistorial ? null : cliente.id)}
+                    >
+                      {mostrarHistorial ? "Ocultar historial" : "Ver historial"}
+                    </button>
+                  </div>
+                </div>
+
+                <div style={styles.clientStatsGrid}>
+                  <Card title="Compras" value={String(stats.historial.length)} />
+                  <Card title="Total gastado" value={money(stats.totalGastado)} />
+                  <Card title="Ticket promedio" value={money(stats.ticketPromedio)} />
+                  <Card title="Última compra" value={stats.ultimaCompra ? formatDate(stats.ultimaCompra.fecha) : "Sin compras"} />
+                </div>
+
+                {mostrarHistorial && (
+                  <div style={{ marginTop: 14 }}>
+                    {stats.historial.length === 0 ? (
+                      <Empty text="Este cliente todavía no tiene compras registradas." />
+                    ) : (
+                      stats.historial
+                        .slice()
+                        .sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())
+                        .map((venta) => (
+                          <div key={venta.id} style={styles.historyBox}>
+                            <Row
+                              left={`${formatDate(venta.fecha)} - ${venta.medioPago}`}
+                              right={money(venta.total)}
+                              bold
+                            />
+                            {venta.items.map((item, index) => (
+                              <Row
+                                key={index}
+                                left={`${item.nombre} x ${item.cantidad}`}
+                                right={money(item.subtotal)}
+                              />
+                            ))}
+                          </div>
+                        ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
       </Panel>
     </>
@@ -1814,6 +2062,51 @@ function Ventas({
 
   const total = carrito.reduce((acc, item) => acc + item.subtotal, 0);
 
+  function cambiarCantidadCarrito(index: number, valor: string) {
+    const nuevaCantidad = Number(valor);
+
+    if (!nuevaCantidad || nuevaCantidad <= 0) {
+      quitarItemCarrito(index);
+      return;
+    }
+
+    const itemActual = carrito[index];
+    const producto = productos.find((p) => p.id === itemActual.productoId);
+
+    if (!producto) return;
+
+    const cantidadOtrosItems = carrito
+      .filter((item, i) => item.productoId === itemActual.productoId && i !== index)
+      .reduce((acc, item) => acc + item.cantidad, 0);
+
+    if (cantidadOtrosItems + nuevaCantidad > producto.stock) {
+      alert("No hay stock suficiente para esa cantidad.");
+      return;
+    }
+
+    setCarrito(
+      carrito.map((item, i) =>
+        i === index
+          ? {
+              ...item,
+              cantidad: nuevaCantidad,
+              subtotal: item.precioUnitario * nuevaCantidad,
+            }
+          : item
+      )
+    );
+  }
+
+  function quitarItemCarrito(index: number) {
+    setCarrito(carrito.filter((_item, i) => i !== index));
+  }
+
+  function vaciarCarrito() {
+    if (carrito.length === 0) return;
+    if (!confirm("¿Querés vaciar el carrito?")) return;
+    setCarrito([]);
+  }
+
   function agregarAlCarrito() {
     const producto = productos.find((p) => p.id === Number(productoId));
     const cant = Number(cantidad);
@@ -1938,7 +2231,7 @@ function Ventas({
         caja_id: caja.id,
         venta_id: ventaData.id,
         tipo: "Ingreso",
-        concepto: `Venta #${ventaData.id} - ${medioPago}`,
+        concepto: `Venta - ${medioPago}`,
         monto: total,
       })
       .select()
@@ -1955,6 +2248,7 @@ function Ventas({
         id: ventaData.id,
         comercioId: ventaData.comercio_id,
         fecha: ventaData.fecha,
+        clienteId: ventaData.cliente_id || null,
         cliente: ventaData.cliente_nombre,
         medioPago: ventaData.medio_pago,
         total: Number(ventaData.total),
@@ -2050,10 +2344,32 @@ function Ventas({
           ) : (
             <>
               {carrito.map((item, index) => (
-                <Row key={index} left={`${item.nombre} x ${item.cantidad}`} right={money(item.subtotal)} />
+                <div key={index} style={styles.cartItem}>
+                  <div>
+                    <strong>{item.nombre}</strong>
+                    <p style={styles.cartMeta}>{money(item.precioUnitario)} por unidad</p>
+                  </div>
+
+                  <input
+                    style={styles.qtyInput}
+                    type="number"
+                    min="1"
+                    value={item.cantidad}
+                    onChange={(e) => cambiarCantidadCarrito(index, e.target.value)}
+                  />
+
+                  <strong>{money(item.subtotal)}</strong>
+
+                  <button style={styles.smallButtonDanger} onClick={() => quitarItemCarrito(index)}>
+                    Quitar
+                  </button>
+                </div>
               ))}
               <hr style={styles.hr} />
               <Row left="Total" right={money(total)} bold />
+              <div style={styles.actions}>
+                <SecondaryButton onClick={vaciarCarrito}>Vaciar carrito</SecondaryButton>
+              </div>
             </>
           )}
         </Panel>
@@ -2548,6 +2864,7 @@ function Reportes({
   saldoCajaEstimado,
   historialCajas,
   gastos,
+  clientes,
 }: {
   ventas: Venta[];
   productos: Producto[];
@@ -2558,6 +2875,7 @@ function Reportes({
   saldoCajaEstimado: number;
   historialCajas: HistorialCaja[];
   gastos: Gasto[];
+  clientes: Cliente[];
 }) {
   const ventasPorDia = useMemo(() => {
     const mapa: Record<string, { total: number; cantidad: number }> = {};
@@ -2628,6 +2946,24 @@ function Reportes({
     return Object.entries(mapa).map(([dia, total]) => ({ dia, total })).sort((a, b) => b.total - a.total);
   }, [ventas]);
 
+  const clientesRanking = useMemo(() => {
+    return clientes
+      .map((cliente) => {
+        const historial = ventas.filter((venta) => {
+          if (venta.clienteId) return venta.clienteId === cliente.id;
+          return venta.cliente === cliente.nombre;
+        });
+        const total = historial.reduce((acc, venta) => acc + venta.total, 0);
+        const ticket = historial.length > 0 ? total / historial.length : 0;
+        return { nombre: cliente.nombre, cantidad: historial.length, total, ticket };
+      })
+      .filter((cliente) => cliente.cantidad > 0)
+      .sort((a, b) => b.total - a.total);
+  }, [clientes, ventas]);
+
+  const ventasIdentificadas = ventas.filter((venta) => venta.cliente !== "Consumidor final").length;
+  const ventasConsumidorFinal = ventas.length - ventasIdentificadas;
+
   const costoMercaderiaVendida = ventas.reduce((acc, venta) => {
     return acc + venta.items.reduce((total, item) => {
       const producto = productos.find((p) => p.id === item.productoId);
@@ -2662,6 +2998,7 @@ function Reportes({
   const maxMes = Math.max(...ventasPorMes.map((mes) => mes.total), 0);
   const maxMedioPago = Math.max(...ventasPorMedioPago.map((m) => m.total), 0);
   const maxDiaSemana = Math.max(...ventasPorDiaSemana.map((d) => d.total), 0);
+  const maxCliente = Math.max(...clientesRanking.map((c) => c.total), 0);
 
   return (
     <>
@@ -2681,6 +3018,13 @@ function Reportes({
         <Card title="Mejor día" value={mejorDia.fecha} />
       </div>
 
+      <div style={styles.cardsGrid}>
+        <Card title="Clientes con compras" value={String(clientesRanking.length)} />
+        <Card title="Ventas identificadas" value={String(ventasIdentificadas)} />
+        <Card title="Consumidor final" value={String(ventasConsumidorFinal)} />
+        <Card title="Clientes registrados" value={String(clientes.length)} />
+      </div>
+
       <div style={styles.twoColumns}>
         <Panel title="Ventas diarias">
           {ventasPorDia.length === 0 ? <Empty text="Todavía no hay ventas para graficar." /> : ventasPorDia.map((dia) => {
@@ -2694,6 +3038,33 @@ function Reportes({
             const ancho = maxMes > 0 ? Math.max((mes.total / maxMes) * 100, 4) : 0;
             return <ChartRow key={mes.mes} label={mes.mes} value={money(mes.total)} width={ancho} />;
           })}
+        </Panel>
+      </div>
+
+      <div style={styles.twoColumns}>
+        <Panel title="Clientes que más gastan">
+          {clientesRanking.length === 0 ? <Empty text="Todavía no hay clientes con compras." /> : clientesRanking.slice(0, 10).map((cliente) => {
+            const ancho = maxCliente > 0 ? Math.max((cliente.total / maxCliente) * 100, 4) : 0;
+            return <ChartRow key={cliente.nombre} label={`${cliente.nombre} (${cliente.cantidad} compras)`} value={money(cliente.total)} width={ancho} />;
+          })}
+        </Panel>
+
+        <Panel title="Clientes frecuentes">
+          {clientesRanking.length === 0 ? (
+            <Empty text="Todavía no hay compras asociadas a clientes." />
+          ) : (
+            clientesRanking
+              .slice()
+              .sort((a, b) => b.cantidad - a.cantidad)
+              .slice(0, 10)
+              .map((cliente) => (
+                <Row
+                  key={cliente.nombre}
+                  left={cliente.nombre}
+                  right={`${cliente.cantidad} compras / Ticket ${money(cliente.ticket)}`}
+                />
+              ))
+          )}
         </Panel>
       </div>
 
@@ -2933,14 +3304,14 @@ const styles: Record<string, React.CSSProperties> = {
   main: {
     minHeight: "100vh",
     background:
-      "radial-gradient(circle at top left, rgba(239,68,68,0.18), transparent 30%), radial-gradient(circle at bottom right, rgba(127,29,29,0.18), transparent 32%), linear-gradient(135deg, #fff7f7 0%, #f8fafc 52%, #fee2e2 100%)",
+      "radial-gradient(circle at top left, rgba(220,38,38,0.30), transparent 30%), radial-gradient(circle at bottom right, rgba(127,29,29,0.34), transparent 32%), linear-gradient(135deg, #fff7f7 0%, #f8fafc 52%, #fee2e2 100%)",
     fontFamily:
       'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
   loginMain: {
     minHeight: "100vh",
     background:
-      "radial-gradient(circle at 20% 20%, rgba(239,68,68,0.38), transparent 28%), radial-gradient(circle at 80% 70%, rgba(127,29,29,0.45), transparent 32%), linear-gradient(135deg, #020617 0%, #111827 45%, #450a0a 100%)",
+      "radial-gradient(circle at 20% 20%, rgba(220,38,38,0.58), transparent 28%), radial-gradient(circle at 80% 70%, rgba(127,29,29,0.64), transparent 32%), linear-gradient(135deg, #020617 0%, #111827 45%, #3f0505 100%)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -2979,7 +3350,7 @@ const styles: Record<string, React.CSSProperties> = {
   sidebar: {
     width: 292,
     background:
-      "linear-gradient(180deg, #020617 0%, #111827 42%, #450a0a 100%)",
+      "linear-gradient(180deg, #020617 0%, #111827 42%, #3f0505 100%)",
     color: "white",
     padding: 24,
     flexShrink: 0,
@@ -2994,7 +3365,7 @@ const styles: Record<string, React.CSSProperties> = {
     height: 180,
     right: -70,
     top: -40,
-    background: "radial-gradient(circle, rgba(239,68,68,0.38), transparent 64%)",
+    background: "radial-gradient(circle, rgba(220,38,38,0.58), transparent 64%)",
     pointerEvents: "none",
   },
   sidebarHeaderBox: {
@@ -3350,6 +3721,95 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 18,
     background: "#fff7f7",
     border: "1px solid #fecaca",
+  },
+  smallButtonAlt: {
+    border: "none",
+    borderRadius: 12,
+    padding: "8px 11px",
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: "pointer",
+    background: "rgba(220, 38, 38, 0.12)",
+    color: "#991b1b",
+  },
+  smallButtonDanger: {
+    border: "none",
+    borderRadius: 12,
+    padding: "8px 11px",
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: "pointer",
+    background: "#fee2e2",
+    color: "#991b1b",
+  },
+  cartItem: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) 90px 120px auto",
+    gap: 12,
+    alignItems: "center",
+    padding: "12px 0",
+    borderBottom: "1px solid #e2e8f0",
+  },
+  cartMeta: {
+    color: "#64748b",
+    fontSize: 12,
+    margin: "4px 0 0",
+  },
+  qtyInput: {
+    border: "1px solid #cbd5e1",
+    borderRadius: 12,
+    padding: "9px 10px",
+    fontSize: 14,
+    width: "100%",
+    boxSizing: "border-box",
+    background: "white",
+    color: "#0f172a",
+    outline: "none",
+  },
+  clientCard: {
+    background: "rgba(255,255,255,0.86)",
+    border: "1px solid rgba(226, 232, 240, 0.95)",
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 16,
+    boxShadow: "0 10px 28px rgba(15, 23, 42, 0.06)",
+  },
+  clientHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 16,
+    alignItems: "flex-start",
+    marginBottom: 14,
+  },
+  clientName: {
+    margin: 0,
+    color: "#0f172a",
+    fontSize: 18,
+    fontWeight: 950,
+    letterSpacing: "-0.03em",
+  },
+  clientMeta: {
+    margin: "6px 0 0",
+    color: "#64748b",
+    fontSize: 13,
+  },
+  clientActions: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+  },
+  clientStatsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+    gap: 12,
+  },
+  historyBox: {
+    background: "#f8fafc",
+    border: "1px solid #e2e8f0",
+    borderRadius: 16,
+    padding: "6px 14px",
+    marginBottom: 10,
   },
   hr: {
     border: "none",

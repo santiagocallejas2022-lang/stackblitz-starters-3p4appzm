@@ -62,6 +62,10 @@ type Venta = {
   total: number;
   items: ItemVenta[];
   cajaId: number;
+  estado: "activa" | "anulada";
+  motivoAnulacion: string;
+  anuladaAt: string | null;
+  anuladaPor: string | null;
 };
 
 type MovimientoCaja = {
@@ -189,7 +193,8 @@ export default function Home() {
   const [historialCajas, setHistorialCajas] = useState<HistorialCaja[]>([]);
   const [gastos, setGastos] = useState<Gasto[]>([]);
   const [capacitaciones, setCapacitaciones] = useState<Capacitacion[]>([]);
-  const [inscripcionesCapacitaciones, setInscripcionesCapacitaciones] = useState<InscripcionCapacitacion[]>([]);
+  const [inscripcionesCapacitaciones, setInscripcionesCapacitaciones] =
+    useState<InscripcionCapacitacion[]>([]);
   const [caja, setCaja] = useState<Caja>(cajaVacia());
 
   useEffect(() => {
@@ -211,9 +216,11 @@ export default function Home() {
 
     cargarUsuario();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUsuario(session?.user ?? null);
-    });
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUsuario(session?.user ?? null);
+      },
+    );
 
     return () => {
       listener.subscription.unsubscribe();
@@ -233,7 +240,8 @@ export default function Home() {
 
     const { data, error } = await supabase
       .from("usuarios_comercios")
-      .select(`
+      .select(
+        `
         comercio_id,
         rol,
         comercios (
@@ -245,7 +253,8 @@ export default function Home() {
           email,
           estado
         )
-      `)
+      `,
+      )
       .eq("user_id", usuario.id)
       .limit(1)
       .maybeSingle();
@@ -336,7 +345,7 @@ export default function Home() {
         comercioId: c.comercio_id,
         nombre: c.nombre,
         telefono: c.telefono || "",
-      }))
+      })),
     );
   }
 
@@ -383,6 +392,10 @@ export default function Home() {
         medioPago: v.medio_pago,
         total: Number(v.total),
         cajaId: v.caja_id,
+        estado: v.estado === "anulada" ? "anulada" : "activa",
+        motivoAnulacion: v.motivo_anulacion || "",
+        anuladaAt: v.anulada_at || null,
+        anuladaPor: v.anulada_por || null,
         items,
       };
     });
@@ -413,7 +426,9 @@ export default function Home() {
       return;
     }
 
-    const movimientosNormalizados: MovimientoCaja[] = (movimientosData || []).map((m: any) => ({
+    const movimientosNormalizados: MovimientoCaja[] = (
+      movimientosData || []
+    ).map((m: any) => ({
       id: m.id,
       comercioId: m.comercio_id,
       cajaId: m.caja_id,
@@ -433,7 +448,8 @@ export default function Home() {
       fechaApertura: c.fecha_apertura,
       fechaCierre: c.fecha_cierre,
       saldoInicial: Number(c.saldo_inicial),
-      saldoFinalReal: c.saldo_final_real === null ? null : Number(c.saldo_final_real),
+      saldoFinalReal:
+        c.saldo_final_real === null ? null : Number(c.saldo_final_real),
     }));
 
     const cajaAbierta = cajasNormalizadas.find((c) => c.abierta);
@@ -442,7 +458,9 @@ export default function Home() {
     const historial = cajasNormalizadas
       .filter((c) => !c.abierta && c.fechaCierre && c.saldoFinalReal !== null)
       .map((c) => {
-        const movimientosDeCaja = movimientosNormalizados.filter((m) => m.cajaId === c.id);
+        const movimientosDeCaja = movimientosNormalizados.filter(
+          (m) => m.cajaId === c.id,
+        );
 
         const ingresos = movimientosDeCaja
           .filter((m) => m.tipo === "Ingreso")
@@ -494,15 +512,16 @@ export default function Home() {
         monto: Number(g.monto || 0),
         medioPago: g.medio_pago || "",
         observaciones: g.observaciones || "",
-      }))
+      })),
     );
   }
 
   async function cargarCapacitaciones(comercioId: number, rol?: string) {
-    const { data: capacitacionesData, error: capacitacionesError } = await supabase
-      .from("capacitaciones")
-      .select("*")
-      .order("fecha_inicio", { ascending: true, nullsFirst: false });
+    const { data: capacitacionesData, error: capacitacionesError } =
+      await supabase
+        .from("capacitaciones")
+        .select("*")
+        .order("fecha_inicio", { ascending: true, nullsFirst: false });
 
     if (capacitacionesError) {
       alert("Error al cargar capacitaciones: " + capacitacionesError.message);
@@ -518,7 +537,8 @@ export default function Home() {
       inscripcionesQuery = inscripcionesQuery.eq("comercio_id", comercioId);
     }
 
-    const { data: inscripcionesData, error: inscripcionesError } = await inscripcionesQuery;
+    const { data: inscripcionesData, error: inscripcionesError } =
+      await inscripcionesQuery;
 
     if (inscripcionesError) {
       alert("Error al cargar inscripciones: " + inscripcionesError.message);
@@ -539,7 +559,7 @@ export default function Home() {
         link: c.link || "",
         estado: c.estado || "activa",
         createdAt: c.created_at,
-      }))
+      })),
     );
 
     setInscripcionesCapacitaciones(
@@ -555,7 +575,7 @@ export default function Home() {
         observaciones: i.observaciones || "",
         estado: i.estado || "inscripto",
         createdAt: i.created_at,
-      }))
+      })),
     );
   }
 
@@ -613,7 +633,10 @@ export default function Home() {
       .single();
 
     if (comercioError) {
-      alert("El usuario se creó, pero falló la creación del comercio: " + comercioError.message);
+      alert(
+        "El usuario se creó, pero falló la creación del comercio: " +
+          comercioError.message,
+      );
       return;
     }
 
@@ -626,7 +649,10 @@ export default function Home() {
       });
 
     if (relacionError) {
-      alert("El comercio se creó, pero falló la vinculación del usuario: " + relacionError.message);
+      alert(
+        "El comercio se creó, pero falló la vinculación del usuario: " +
+          relacionError.message,
+      );
       return;
     }
 
@@ -670,10 +696,20 @@ export default function Home() {
     setCaja(cajaVacia());
   }
 
-  const movimientosCajaActual = movimientosCaja.filter((mov) => mov.cajaId === caja.id);
-  const ventasCajaActual = ventas.filter((venta) => venta.cajaId === caja.id);
-  const ventasDelDia = ventas.reduce((acc, venta) => acc + venta.total, 0);
-  const productosStockBajo = productos.filter((producto) => producto.activo && producto.stock < producto.minimo);
+  const movimientosCajaActual = movimientosCaja.filter(
+    (mov) => mov.cajaId === caja.id,
+  );
+  const ventasActivas = ventas.filter((venta) => venta.estado !== "anulada");
+  const ventasCajaActual = ventasActivas.filter(
+    (venta) => venta.cajaId === caja.id,
+  );
+  const ventasDelDia = ventasActivas.reduce(
+    (acc, venta) => acc + venta.total,
+    0,
+  );
+  const productosStockBajo = productos.filter(
+    (producto) => producto.activo && producto.stock < producto.minimo,
+  );
 
   const ingresosCaja = movimientosCajaActual
     .filter((mov) => mov.tipo === "Ingreso")
@@ -728,7 +764,9 @@ export default function Home() {
                 </button>
               </div>
 
-              <p style={{ ...styles.loginText, marginTop: 20, marginBottom: 0 }}>
+              <p
+                style={{ ...styles.loginText, marginTop: 20, marginBottom: 0 }}
+              >
                 ¿No tenés cuenta?
               </p>
 
@@ -833,7 +871,7 @@ export default function Home() {
               caja={caja}
               productos={productos}
               productosStockBajo={productosStockBajo}
-              ventas={ventas}
+              ventas={ventasActivas}
               saldoCajaEstimado={saldoCajaEstimado}
               ventasCajaActual={ventasCajaActual}
             />
@@ -864,6 +902,7 @@ export default function Home() {
               setMovimientosCaja={setMovimientosCaja}
               recargarDatos={cargarDatos}
               comercioActual={comercioActual}
+              rolUsuario={rolUsuario}
             />
           )}
 
@@ -887,7 +926,7 @@ export default function Home() {
               clientes={clientes}
               setClientes={setClientes}
               comercioActual={comercioActual}
-              ventas={ventas}
+              ventas={ventasActivas}
             />
           )}
 
@@ -915,7 +954,7 @@ export default function Home() {
 
           {seccion === "reportes" && (
             <Reportes
-              ventas={ventas}
+              ventas={ventasActivas}
               productos={productos}
               ventasDelDia={ventasDelDia}
               productosStockBajo={productosStockBajo}
@@ -1005,11 +1044,27 @@ function MiComercio({
 
       <Panel title="Datos del comercio">
         <div style={styles.formGridSmall}>
-          <Input placeholder="Nombre del comercio" value={nombre} onChange={setNombre} />
+          <Input
+            placeholder="Nombre del comercio"
+            value={nombre}
+            onChange={setNombre}
+          />
           <Input placeholder="Rubro" value={rubro} onChange={setRubro} />
-          <Input placeholder="Teléfono / WhatsApp" value={telefono} onChange={setTelefono} />
-          <Input placeholder="Dirección" value={direccion} onChange={setDireccion} />
-          <Input placeholder="Email de contacto" value={email} onChange={setEmail} />
+          <Input
+            placeholder="Teléfono / WhatsApp"
+            value={telefono}
+            onChange={setTelefono}
+          />
+          <Input
+            placeholder="Dirección"
+            value={direccion}
+            onChange={setDireccion}
+          />
+          <Input
+            placeholder="Email de contacto"
+            value={email}
+            onChange={setEmail}
+          />
           <Button onClick={guardarDatosComercio}>Guardar datos</Button>
         </div>
       </Panel>
@@ -1017,7 +1072,10 @@ function MiComercio({
       <Panel title="Resumen de cuenta">
         <Row left="Comercio" right={comercioActual?.nombre || "Sin nombre"} />
         <Row left="Rubro" right={comercioActual?.rubro || "Sin rubro"} />
-        <Row left="Teléfono" right={comercioActual?.telefono || "Sin teléfono"} />
+        <Row
+          left="Teléfono"
+          right={comercioActual?.telefono || "Sin teléfono"}
+        />
         <Row left="Estado" right={comercioActual?.estado || "activo"} />
       </Panel>
     </>
@@ -1039,7 +1097,10 @@ function Sidebar({
   rolUsuario: string;
   cerrarSesion: () => void;
 }) {
-  const grupos: { titulo: string; items: { id: Seccion; label: string; icono: string }[] }[] = [
+  const grupos: {
+    titulo: string;
+    items: { id: Seccion; label: string; icono: string }[];
+  }[] = [
     {
       titulo: "Gestión",
       items: [
@@ -1067,7 +1128,8 @@ function Sidebar({
     },
   ];
 
-  const etiquetaRol = rolUsuario === "admin_secretaria" ? "Secretaría" : "Comercio";
+  const etiquetaRol =
+    rolUsuario === "admin_secretaria" ? "Secretaría" : "Comercio";
 
   return (
     <aside style={styles.sidebar}>
@@ -1098,8 +1160,12 @@ function Sidebar({
                       ? "linear-gradient(135deg, rgba(220,38,38,0.98), rgba(127,29,29,0.94))"
                       : "rgba(15, 23, 42, 0.24)",
                     color: activo ? "white" : "#cbd5e1",
-                    borderColor: activo ? "rgba(248, 113, 113, 0.75)" : "rgba(148, 163, 184, 0.12)",
-                    boxShadow: activo ? "0 12px 24px rgba(127, 29, 29, 0.35)" : "none",
+                    borderColor: activo
+                      ? "rgba(248, 113, 113, 0.75)"
+                      : "rgba(148, 163, 184, 0.12)",
+                    boxShadow: activo
+                      ? "0 12px 24px rgba(127, 29, 29, 0.35)"
+                      : "none",
                   }}
                 >
                   <span style={styles.navIcon}>{item.icono}</span>
@@ -1157,9 +1223,20 @@ function Inicio({
 
       <div style={styles.cardsGrid}>
         <Card title="Productos" value={String(productos.length)} />
-        <Card title="Ventas caja actual" value={String(ventasCajaActual.length)} />
-        <Card title="Caja actual" value={caja.abierta ? "Abierta" : "Sin caja"} />
-        <Card title="Apertura" value={caja.fechaApertura ? formatDate(caja.fechaApertura) : "Sin apertura"} />
+        <Card
+          title="Ventas caja actual"
+          value={String(ventasCajaActual.length)}
+        />
+        <Card
+          title="Caja actual"
+          value={caja.abierta ? "Abierta" : "Sin caja"}
+        />
+        <Card
+          title="Apertura"
+          value={
+            caja.fechaApertura ? formatDate(caja.fechaApertura) : "Sin apertura"
+          }
+        />
       </div>
 
       <div style={styles.twoColumns}>
@@ -1209,7 +1286,9 @@ function Productos({
   comercioActual: Comercio | null;
 }) {
   const [mostrarFormulario, setMostrarFormulario] = useState(false);
-  const [productoEditando, setProductoEditando] = useState<Producto | null>(null);
+  const [productoEditando, setProductoEditando] = useState<Producto | null>(
+    null,
+  );
 
   const [form, setForm] = useState({
     nombre: "",
@@ -1340,8 +1419,8 @@ function Productos({
 
     setProductos(
       productos.map((producto) =>
-        producto.id === productoActualizado.id ? productoActualizado : producto
-      )
+        producto.id === productoActualizado.id ? productoActualizado : producto,
+      ),
     );
 
     limpiarFormulario();
@@ -1378,8 +1457,8 @@ function Productos({
 
     setProductos(
       productos.map((p) =>
-        p.id === productoActualizado.id ? productoActualizado : p
-      )
+        p.id === productoActualizado.id ? productoActualizado : p,
+      ),
     );
   }
 
@@ -1465,9 +1544,7 @@ function Productos({
 
           <div style={styles.actions}>
             {productoEditando ? (
-              <Button onClick={guardarCambiosProducto}>
-                Guardar cambios
-              </Button>
+              <Button onClick={guardarCambiosProducto}>Guardar cambios</Button>
             ) : (
               <Button onClick={agregarProducto}>Guardar producto</Button>
             )}
@@ -1558,7 +1635,9 @@ function Clientes({
   const [nombre, setNombre] = useState("");
   const [telefono, setTelefono] = useState("");
   const [clienteEditando, setClienteEditando] = useState<Cliente | null>(null);
-  const [clienteHistorialId, setClienteHistorialId] = useState<number | null>(null);
+  const [clienteHistorialId, setClienteHistorialId] = useState<number | null>(
+    null,
+  );
 
   function ventasDelCliente(cliente: Cliente) {
     return ventas.filter((venta) => {
@@ -1570,10 +1649,13 @@ function Clientes({
   function estadisticasCliente(cliente: Cliente) {
     const historial = ventasDelCliente(cliente);
     const totalGastado = historial.reduce((acc, venta) => acc + venta.total, 0);
-    const ticketPromedio = historial.length > 0 ? totalGastado / historial.length : 0;
+    const ticketPromedio =
+      historial.length > 0 ? totalGastado / historial.length : 0;
     const ultimaCompra = historial
       .slice()
-      .sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())[0];
+      .sort(
+        (a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime(),
+      )[0];
 
     return {
       historial,
@@ -1665,7 +1747,11 @@ function Clientes({
       telefono: data.telefono || "",
     };
 
-    setClientes(clientes.map((cliente) => cliente.id === clienteActualizado.id ? clienteActualizado : cliente));
+    setClientes(
+      clientes.map((cliente) =>
+        cliente.id === clienteActualizado.id ? clienteActualizado : cliente,
+      ),
+    );
     limpiarFormulario();
   }
 
@@ -1679,7 +1765,11 @@ function Clientes({
       <Panel title={clienteEditando ? "Editar cliente" : "Nuevo cliente"}>
         <div style={styles.formGridSmall}>
           <Input placeholder="Nombre" value={nombre} onChange={setNombre} />
-          <Input placeholder="Teléfono" value={telefono} onChange={setTelefono} />
+          <Input
+            placeholder="Teléfono"
+            value={telefono}
+            onChange={setTelefono}
+          />
           {clienteEditando ? (
             <Button onClick={guardarCambiosCliente}>Guardar cambios</Button>
           ) : (
@@ -1689,7 +1779,9 @@ function Clientes({
 
         {clienteEditando && (
           <div style={styles.actions}>
-            <SecondaryButton onClick={limpiarFormulario}>Cancelar edición</SecondaryButton>
+            <SecondaryButton onClick={limpiarFormulario}>
+              Cancelar edición
+            </SecondaryButton>
           </div>
         )}
       </Panel>
@@ -1707,15 +1799,24 @@ function Clientes({
                 <div style={styles.clientHeader}>
                   <div>
                     <h4 style={styles.clientName}>{cliente.nombre}</h4>
-                    <p style={styles.clientMeta}>{cliente.telefono || "Sin teléfono"}</p>
+                    <p style={styles.clientMeta}>
+                      {cliente.telefono || "Sin teléfono"}
+                    </p>
                   </div>
                   <div style={styles.clientActions}>
-                    <button style={styles.smallButton} onClick={() => iniciarEdicion(cliente)}>
+                    <button
+                      style={styles.smallButton}
+                      onClick={() => iniciarEdicion(cliente)}
+                    >
                       Editar
                     </button>
                     <button
                       style={styles.smallButtonAlt}
-                      onClick={() => setClienteHistorialId(mostrarHistorial ? null : cliente.id)}
+                      onClick={() =>
+                        setClienteHistorialId(
+                          mostrarHistorial ? null : cliente.id,
+                        )
+                      }
                     >
                       {mostrarHistorial ? "Ocultar historial" : "Ver historial"}
                     </button>
@@ -1723,10 +1824,26 @@ function Clientes({
                 </div>
 
                 <div style={styles.clientStatsGrid}>
-                  <Card title="Compras" value={String(stats.historial.length)} />
-                  <Card title="Total gastado" value={money(stats.totalGastado)} />
-                  <Card title="Ticket promedio" value={money(stats.ticketPromedio)} />
-                  <Card title="Última compra" value={stats.ultimaCompra ? formatDate(stats.ultimaCompra.fecha) : "Sin compras"} />
+                  <Card
+                    title="Compras"
+                    value={String(stats.historial.length)}
+                  />
+                  <Card
+                    title="Total gastado"
+                    value={money(stats.totalGastado)}
+                  />
+                  <Card
+                    title="Ticket promedio"
+                    value={money(stats.ticketPromedio)}
+                  />
+                  <Card
+                    title="Última compra"
+                    value={
+                      stats.ultimaCompra
+                        ? formatDate(stats.ultimaCompra.fecha)
+                        : "Sin compras"
+                    }
+                  />
                 </div>
 
                 {mostrarHistorial && (
@@ -1736,7 +1853,11 @@ function Clientes({
                     ) : (
                       stats.historial
                         .slice()
-                        .sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())
+                        .sort(
+                          (a, b) =>
+                            new Date(b.fecha).getTime() -
+                            new Date(a.fecha).getTime(),
+                        )
                         .map((venta) => (
                           <div key={venta.id} style={styles.historyBox}>
                             <Row
@@ -1832,7 +1953,8 @@ function Caja({
       fechaApertura: data.fecha_apertura,
       fechaCierre: data.fecha_cierre,
       saldoInicial: Number(data.saldo_inicial),
-      saldoFinalReal: data.saldo_final_real === null ? null : Number(data.saldo_final_real),
+      saldoFinalReal:
+        data.saldo_final_real === null ? null : Number(data.saldo_final_real),
     });
 
     setSaldoInicial("");
@@ -1924,11 +2046,17 @@ function Caja({
 
   return (
     <>
-      <Header title="Caja diaria" subtitle="Apertura, saldo actual, movimientos, cierre e historial." />
+      <Header
+        title="Caja diaria"
+        subtitle="Apertura, saldo actual, movimientos, cierre e historial."
+      />
 
       <div style={styles.cardsGrid}>
         <Card title="Estado" value={caja.abierta ? "Abierta" : "Cerrada"} />
-        <Card title="Caja actual" value={caja.abierta ? "Abierta" : "Sin caja"} />
+        <Card
+          title="Caja actual"
+          value={caja.abierta ? "Abierta" : "Sin caja"}
+        />
         <Card title="Saldo inicial" value={money(caja.saldoInicial)} />
         <Card title="Saldo actual estimado" value={money(saldoCajaEstimado)} />
       </div>
@@ -1936,13 +2064,26 @@ function Caja({
       <div style={styles.cardsGrid}>
         <Card title="Ingresos" value={money(ingresosCaja)} />
         <Card title="Egresos" value={money(egresosCaja)} />
-        <Card title="Apertura" value={caja.fechaApertura ? formatDate(caja.fechaApertura) : "Sin apertura"} />
-        <Card title="Cierre" value={caja.fechaCierre ? formatDate(caja.fechaCierre) : "Sin cierre"} />
+        <Card
+          title="Apertura"
+          value={
+            caja.fechaApertura ? formatDate(caja.fechaApertura) : "Sin apertura"
+          }
+        />
+        <Card
+          title="Cierre"
+          value={caja.fechaCierre ? formatDate(caja.fechaCierre) : "Sin cierre"}
+        />
       </div>
 
       <div style={styles.twoColumns}>
         <Panel title="Abrir caja">
-          <Input placeholder="Saldo inicial" type="number" value={saldoInicial} onChange={setSaldoInicial} />
+          <Input
+            placeholder="Saldo inicial"
+            type="number"
+            value={saldoInicial}
+            onChange={setSaldoInicial}
+          />
 
           <div style={styles.actions}>
             <Button onClick={abrirCaja}>Abrir caja</Button>
@@ -1950,7 +2091,12 @@ function Caja({
         </Panel>
 
         <Panel title="Cerrar caja">
-          <Input placeholder="Saldo final real contado" type="number" value={saldoFinalReal} onChange={setSaldoFinalReal} />
+          <Input
+            placeholder="Saldo final real contado"
+            type="number"
+            value={saldoFinalReal}
+            onChange={setSaldoFinalReal}
+          />
 
           <div style={styles.actions}>
             <Button onClick={cerrarCaja}>Cerrar caja</Button>
@@ -1966,13 +2112,26 @@ function Caja({
 
       <Panel title="Movimiento manual de caja">
         <div style={styles.formGridSmall}>
-          <select value={tipo} onChange={(e) => setTipo(e.target.value as "Ingreso" | "Egreso")} style={styles.input}>
+          <select
+            value={tipo}
+            onChange={(e) => setTipo(e.target.value as "Ingreso" | "Egreso")}
+            style={styles.input}
+          >
             <option>Ingreso</option>
             <option>Egreso</option>
           </select>
 
-          <Input placeholder="Concepto" value={concepto} onChange={setConcepto} />
-          <Input placeholder="Monto" type="number" value={monto} onChange={setMonto} />
+          <Input
+            placeholder="Concepto"
+            value={concepto}
+            onChange={setConcepto}
+          />
+          <Input
+            placeholder="Monto"
+            type="number"
+            value={monto}
+            onChange={setMonto}
+          />
 
           <Button onClick={agregarMovimiento}>Agregar movimiento</Button>
         </div>
@@ -1986,7 +2145,11 @@ function Caja({
             .slice()
             .reverse()
             .map((mov) => (
-              <Row key={mov.id} left={`${formatDate(mov.fecha)} - ${mov.tipo} - ${mov.concepto}`} right={money(mov.monto)} />
+              <Row
+                key={mov.id}
+                left={`${formatDate(mov.fecha)} - ${mov.tipo} - ${mov.concepto}`}
+                right={money(mov.monto)}
+              />
             ))
         )}
       </Panel>
@@ -2044,6 +2207,7 @@ function Ventas({
   setMovimientosCaja,
   recargarDatos,
   comercioActual,
+  rolUsuario,
 }: {
   productos: Producto[];
   ventas: Venta[];
@@ -2053,14 +2217,19 @@ function Ventas({
   setMovimientosCaja: React.Dispatch<React.SetStateAction<MovimientoCaja[]>>;
   recargarDatos: () => Promise<void>;
   comercioActual: Comercio | null;
+  rolUsuario: string;
 }) {
   const [productoId, setProductoId] = useState("");
   const [cantidad, setCantidad] = useState("1");
   const [carrito, setCarrito] = useState<ItemVenta[]>([]);
   const [cliente, setCliente] = useState("Consumidor final");
   const [medioPago, setMedioPago] = useState("Efectivo");
+  const [ventaAnulando, setVentaAnulando] = useState<Venta | null>(null);
+  const [motivoAnulacion, setMotivoAnulacion] = useState("");
+  const [anulandoVenta, setAnulandoVenta] = useState(false);
 
   const total = carrito.reduce((acc, item) => acc + item.subtotal, 0);
+  const puedeAnularVentas = rolUsuario === "admin_comercio";
 
   function cambiarCantidadCarrito(index: number, valor: string) {
     const nuevaCantidad = Number(valor);
@@ -2076,7 +2245,9 @@ function Ventas({
     if (!producto) return;
 
     const cantidadOtrosItems = carrito
-      .filter((item, i) => item.productoId === itemActual.productoId && i !== index)
+      .filter(
+        (item, i) => item.productoId === itemActual.productoId && i !== index,
+      )
       .reduce((acc, item) => acc + item.cantidad, 0);
 
     if (cantidadOtrosItems + nuevaCantidad > producto.stock) {
@@ -2092,8 +2263,8 @@ function Ventas({
               cantidad: nuevaCantidad,
               subtotal: item.precioUnitario * nuevaCantidad,
             }
-          : item
-      )
+          : item,
+      ),
     );
   }
 
@@ -2219,7 +2390,10 @@ function Ventas({
         .eq("comercio_id", comercioActual.id);
 
       if (stockError) {
-        alert("La venta se creó, pero falló la actualización de stock: " + stockError.message);
+        alert(
+          "La venta se creó, pero falló la actualización de stock: " +
+            stockError.message,
+        );
         return;
       }
     }
@@ -2238,7 +2412,10 @@ function Ventas({
       .single();
 
     if (movimientoError) {
-      alert("La venta se creó, pero falló el movimiento de caja: " + movimientoError.message);
+      alert(
+        "La venta se creó, pero falló el movimiento de caja: " +
+          movimientoError.message,
+      );
       return;
     }
 
@@ -2253,6 +2430,10 @@ function Ventas({
         medioPago: ventaData.medio_pago,
         total: Number(ventaData.total),
         cajaId: ventaData.caja_id,
+        estado: "activa",
+        motivoAnulacion: "",
+        anuladaAt: null,
+        anuladaPor: null,
         items: carrito,
       },
     ]);
@@ -2276,9 +2457,80 @@ function Ventas({
     alert("Venta registrada correctamente.");
   }
 
+  function iniciarAnulacion(venta: Venta) {
+    if (!puedeAnularVentas) {
+      alert("Solo un administrador del comercio puede anular ventas.");
+      return;
+    }
+
+    if (venta.estado === "anulada") {
+      alert("La venta ya está anulada.");
+      return;
+    }
+
+    if (!caja.abierta || venta.cajaId !== caja.id) {
+      alert(
+        "Solo se pueden anular ventas de la caja que está abierta actualmente.",
+      );
+      return;
+    }
+
+    setVentaAnulando(venta);
+    setMotivoAnulacion("");
+  }
+
+  function cancelarAnulacion() {
+    if (anulandoVenta) return;
+    setVentaAnulando(null);
+    setMotivoAnulacion("");
+  }
+
+  async function confirmarAnulacion() {
+    if (!ventaAnulando) return;
+
+    const motivo = motivoAnulacion.trim();
+
+    if (!motivo) {
+      alert("Ingresá el motivo de la anulación.");
+      return;
+    }
+
+    if (!caja.abierta || ventaAnulando.cajaId !== caja.id) {
+      alert("La caja de esta venta ya no está abierta.");
+      cancelarAnulacion();
+      return;
+    }
+
+    if (!confirm(`¿Confirmás la anulación de la venta #${ventaAnulando.id}?`)) {
+      return;
+    }
+
+    setAnulandoVenta(true);
+
+    const { error } = await supabase.rpc("anular_venta", {
+      p_venta_id: ventaAnulando.id,
+      p_motivo: motivo,
+    });
+
+    setAnulandoVenta(false);
+
+    if (error) {
+      alert("Error al anular la venta: " + error.message);
+      return;
+    }
+
+    setVentaAnulando(null);
+    setMotivoAnulacion("");
+    await recargarDatos();
+    alert("Venta anulada. El stock y la caja fueron actualizados.");
+  }
+
   return (
     <>
-      <Header title="Ventas" subtitle="Registro de ventas y descuento automático de stock." />
+      <Header
+        title="Ventas"
+        subtitle="Registro de ventas y descuento automático de stock."
+      />
 
       <div style={styles.twoColumns}>
         <Panel title="Nueva venta">
@@ -2295,7 +2547,11 @@ function Ventas({
           )}
 
           <div style={styles.formGridSmall}>
-            <select value={productoId} onChange={(e) => setProductoId(e.target.value)} style={styles.input}>
+            <select
+              value={productoId}
+              onChange={(e) => setProductoId(e.target.value)}
+              style={styles.input}
+            >
               <option value="">Seleccionar producto</option>
               {productos
                 .filter((producto) => producto.activo)
@@ -2306,13 +2562,22 @@ function Ventas({
                 ))}
             </select>
 
-            <Input placeholder="Cantidad" type="number" value={cantidad} onChange={setCantidad} />
+            <Input
+              placeholder="Cantidad"
+              type="number"
+              value={cantidad}
+              onChange={setCantidad}
+            />
 
             <Button onClick={agregarAlCarrito}>Agregar</Button>
           </div>
 
           <div style={{ marginTop: 20 }}>
-            <select value={cliente} onChange={(e) => setCliente(e.target.value)} style={styles.input}>
+            <select
+              value={cliente}
+              onChange={(e) => setCliente(e.target.value)}
+              style={styles.input}
+            >
               <option>Consumidor final</option>
               {clientes.map((c) => (
                 <option key={c.id} value={c.nombre}>
@@ -2347,7 +2612,9 @@ function Ventas({
                 <div key={index} style={styles.cartItem}>
                   <div>
                     <strong>{item.nombre}</strong>
-                    <p style={styles.cartMeta}>{money(item.precioUnitario)} por unidad</p>
+                    <p style={styles.cartMeta}>
+                      {money(item.precioUnitario)} por unidad
+                    </p>
                   </div>
 
                   <input
@@ -2355,12 +2622,17 @@ function Ventas({
                     type="number"
                     min="1"
                     value={item.cantidad}
-                    onChange={(e) => cambiarCantidadCarrito(index, e.target.value)}
+                    onChange={(e) =>
+                      cambiarCantidadCarrito(index, e.target.value)
+                    }
                   />
 
                   <strong>{money(item.subtotal)}</strong>
 
-                  <button style={styles.smallButtonDanger} onClick={() => quitarItemCarrito(index)}>
+                  <button
+                    style={styles.smallButtonDanger}
+                    onClick={() => quitarItemCarrito(index)}
+                  >
                     Quitar
                   </button>
                 </div>
@@ -2368,7 +2640,9 @@ function Ventas({
               <hr style={styles.hr} />
               <Row left="Total" right={money(total)} bold />
               <div style={styles.actions}>
-                <SecondaryButton onClick={vaciarCarrito}>Vaciar carrito</SecondaryButton>
+                <SecondaryButton onClick={vaciarCarrito}>
+                  Vaciar carrito
+                </SecondaryButton>
               </div>
             </>
           )}
@@ -2382,15 +2656,104 @@ function Ventas({
           ventas
             .slice()
             .reverse()
-            .map((venta) => (
-              <Row
-                key={venta.id}
-                left={`${formatDate(venta.fecha)} - ${venta.cliente} - ${venta.medioPago}`}
-                right={money(venta.total)}
-              />
-            ))
+            .map((venta) => {
+              const anulada = venta.estado === "anulada";
+              const puedeAnularEstaVenta =
+                puedeAnularVentas &&
+                !anulada &&
+                caja.abierta &&
+                venta.cajaId === caja.id;
+
+              return (
+                <div key={venta.id} style={styles.saleCard}>
+                  <div style={styles.saleHeader}>
+                    <div>
+                      <div style={styles.saleTitleRow}>
+                        <strong>Venta #{venta.id}</strong>
+                        <Badge danger={anulada}>
+                          {anulada ? "Anulada" : "Activa"}
+                        </Badge>
+                      </div>
+                      <p style={styles.saleMeta}>
+                        {formatDate(venta.fecha)} - {venta.cliente} -{" "}
+                        {venta.medioPago}
+                      </p>
+                    </div>
+
+                    <strong
+                      style={anulada ? styles.cancelledAmount : undefined}
+                    >
+                      {money(venta.total)}
+                    </strong>
+                  </div>
+
+                  {venta.items.length > 0 && (
+                    <div style={styles.saleItems}>
+                      {venta.items.map((item, index) => (
+                        <Row
+                          key={`${venta.id}-${item.productoId}-${index}`}
+                          left={`${item.nombre} x ${item.cantidad}`}
+                          right={money(item.subtotal)}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {anulada && (
+                    <div style={styles.cancellationNotice}>
+                      <strong>Motivo:</strong>{" "}
+                      {venta.motivoAnulacion || "Sin motivo informado"}
+                      {venta.anuladaAt && (
+                        <span> · Anulada el {formatDate(venta.anuladaAt)}</span>
+                      )}
+                    </div>
+                  )}
+
+                  {puedeAnularEstaVenta && (
+                    <div style={styles.actions}>
+                      <button
+                        style={styles.smallButtonDanger}
+                        onClick={() => iniciarAnulacion(venta)}
+                      >
+                        Anular venta
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })
         )}
       </Panel>
+
+      {ventaAnulando && (
+        <div style={styles.modalBackdrop}>
+          <div style={styles.modalBox}>
+            <h3 style={styles.panelTitle}>Anular venta #{ventaAnulando.id}</h3>
+            <p style={styles.text}>
+              Esta operación devolverá el stock y registrará un egreso
+              compensatorio en la caja actual.
+            </p>
+
+            <textarea
+              value={motivoAnulacion}
+              onChange={(e) => setMotivoAnulacion(e.target.value)}
+              placeholder="Motivo obligatorio"
+              style={styles.textarea}
+              rows={4}
+              maxLength={300}
+            />
+
+            <div style={styles.actions}>
+              <Button onClick={confirmarAnulacion}>
+                {anulandoVenta ? "Anulando..." : "Confirmar anulación"}
+              </Button>
+              <SecondaryButton onClick={cancelarAnulacion}>
+                Cancelar
+              </SecondaryButton>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -2476,29 +2839,63 @@ function Gastos({
 
   return (
     <>
-      <Header title="Gastos" subtitle="Carga de gastos para mejorar reportes financieros y flujo de caja." />
+      <Header
+        title="Gastos"
+        subtitle="Carga de gastos para mejorar reportes financieros y flujo de caja."
+      />
 
       <div style={styles.cardsGrid}>
         <Card title="Gastos cargados" value={String(gastos.length)} />
         <Card title="Total de gastos" value={money(totalGastos)} />
-        <Card title="Último gasto" value={gastos[0] ? money(gastos[0].monto) : "$ 0"} />
-        <Card title="Categorías" value={String(new Set(gastos.map((g) => g.categoria)).size)} />
+        <Card
+          title="Último gasto"
+          value={gastos[0] ? money(gastos[0].monto) : "$ 0"}
+        />
+        <Card
+          title="Categorías"
+          value={String(new Set(gastos.map((g) => g.categoria)).size)}
+        />
       </div>
 
       <Panel title="Nuevo gasto">
         <div style={styles.formGrid}>
-          <Input placeholder="Categoría" value={form.categoria} onChange={(v) => setForm({ ...form, categoria: v })} />
-          <Input placeholder="Concepto" value={form.concepto} onChange={(v) => setForm({ ...form, concepto: v })} />
-          <Input placeholder="Proveedor" value={form.proveedor} onChange={(v) => setForm({ ...form, proveedor: v })} />
-          <Input placeholder="Monto" type="number" value={form.monto} onChange={(v) => setForm({ ...form, monto: v })} />
-          <select value={form.medioPago} onChange={(e) => setForm({ ...form, medioPago: e.target.value })} style={styles.input}>
+          <Input
+            placeholder="Categoría"
+            value={form.categoria}
+            onChange={(v) => setForm({ ...form, categoria: v })}
+          />
+          <Input
+            placeholder="Concepto"
+            value={form.concepto}
+            onChange={(v) => setForm({ ...form, concepto: v })}
+          />
+          <Input
+            placeholder="Proveedor"
+            value={form.proveedor}
+            onChange={(v) => setForm({ ...form, proveedor: v })}
+          />
+          <Input
+            placeholder="Monto"
+            type="number"
+            value={form.monto}
+            onChange={(v) => setForm({ ...form, monto: v })}
+          />
+          <select
+            value={form.medioPago}
+            onChange={(e) => setForm({ ...form, medioPago: e.target.value })}
+            style={styles.input}
+          >
             <option>Efectivo</option>
             <option>Transferencia</option>
             <option>Tarjeta</option>
             <option>Mercado Pago</option>
             <option>Otro</option>
           </select>
-          <Input placeholder="Observaciones" value={form.observaciones} onChange={(v) => setForm({ ...form, observaciones: v })} />
+          <Input
+            placeholder="Observaciones"
+            value={form.observaciones}
+            onChange={(v) => setForm({ ...form, observaciones: v })}
+          />
         </div>
 
         <div style={styles.actions}>
@@ -2557,7 +2954,9 @@ function Capacitaciones({
     estado: "activa",
   });
 
-  const [inscripcionActiva, setInscripcionActiva] = useState<number | null>(null);
+  const [inscripcionActiva, setInscripcionActiva] = useState<number | null>(
+    null,
+  );
   const [formInscripcion, setFormInscripcion] = useState({
     nombre: "",
     telefono: "",
@@ -2628,7 +3027,10 @@ function Capacitaciones({
     await recargarDatos();
   }
 
-  async function cambiarEstadoCapacitacion(capacitacion: Capacitacion, estado: string) {
+  async function cambiarEstadoCapacitacion(
+    capacitacion: Capacitacion,
+    estado: string,
+  ) {
     if (!esSecretaria) return;
 
     const { data, error } = await supabase
@@ -2650,8 +3052,8 @@ function Capacitaciones({
               ...c,
               estado: data.estado || estado,
             }
-          : c
-      )
+          : c,
+      ),
     );
   }
 
@@ -2666,7 +3068,11 @@ function Capacitaciones({
       return;
     }
 
-    const yaInscripto = inscripciones.some((i) => i.capacitacionId === capacitacion.id && i.comercioId === comercioActual.id);
+    const yaInscripto = inscripciones.some(
+      (i) =>
+        i.capacitacionId === capacitacion.id &&
+        i.comercioId === comercioActual.id,
+    );
 
     if (yaInscripto) {
       alert("Este comercio ya está inscripto en esta capacitación.");
@@ -2717,7 +3123,9 @@ function Capacitaciones({
     await recargarDatos();
   }
 
-  const capacitacionesActivas = capacitaciones.filter((c) => c.estado !== "finalizada");
+  const capacitacionesActivas = capacitaciones.filter(
+    (c) => c.estado !== "finalizada",
+  );
 
   return (
     <>
@@ -2740,20 +3148,63 @@ function Capacitaciones({
       {esSecretaria && (
         <Panel title="Nueva capacitación">
           <div style={styles.formGrid}>
-            <Input placeholder="Título" value={form.titulo} onChange={(v) => setForm({ ...form, titulo: v })} />
-            <Input placeholder="Descripción" value={form.descripcion} onChange={(v) => setForm({ ...form, descripcion: v })} />
-            <select value={form.modalidad} onChange={(e) => setForm({ ...form, modalidad: e.target.value })} style={styles.input}>
+            <Input
+              placeholder="Título"
+              value={form.titulo}
+              onChange={(v) => setForm({ ...form, titulo: v })}
+            />
+            <Input
+              placeholder="Descripción"
+              value={form.descripcion}
+              onChange={(v) => setForm({ ...form, descripcion: v })}
+            />
+            <select
+              value={form.modalidad}
+              onChange={(e) => setForm({ ...form, modalidad: e.target.value })}
+              style={styles.input}
+            >
               <option>Presencial</option>
               <option>Virtual</option>
               <option>Mixta</option>
             </select>
-            <Input placeholder="Lugar" value={form.lugar} onChange={(v) => setForm({ ...form, lugar: v })} />
-            <Input placeholder="Fecha de inicio" type="datetime-local" value={form.fechaInicio} onChange={(v) => setForm({ ...form, fechaInicio: v })} />
-            <Input placeholder="Fecha de fin" type="datetime-local" value={form.fechaFin} onChange={(v) => setForm({ ...form, fechaFin: v })} />
-            <Input placeholder="Cupos" type="number" value={form.cupos} onChange={(v) => setForm({ ...form, cupos: v })} />
-            <Input placeholder="Destinatarios" value={form.destinatarios} onChange={(v) => setForm({ ...form, destinatarios: v })} />
-            <Input placeholder="Link" value={form.link} onChange={(v) => setForm({ ...form, link: v })} />
-            <select value={form.estado} onChange={(e) => setForm({ ...form, estado: e.target.value })} style={styles.input}>
+            <Input
+              placeholder="Lugar"
+              value={form.lugar}
+              onChange={(v) => setForm({ ...form, lugar: v })}
+            />
+            <Input
+              placeholder="Fecha de inicio"
+              type="datetime-local"
+              value={form.fechaInicio}
+              onChange={(v) => setForm({ ...form, fechaInicio: v })}
+            />
+            <Input
+              placeholder="Fecha de fin"
+              type="datetime-local"
+              value={form.fechaFin}
+              onChange={(v) => setForm({ ...form, fechaFin: v })}
+            />
+            <Input
+              placeholder="Cupos"
+              type="number"
+              value={form.cupos}
+              onChange={(v) => setForm({ ...form, cupos: v })}
+            />
+            <Input
+              placeholder="Destinatarios"
+              value={form.destinatarios}
+              onChange={(v) => setForm({ ...form, destinatarios: v })}
+            />
+            <Input
+              placeholder="Link"
+              value={form.link}
+              onChange={(v) => setForm({ ...form, link: v })}
+            />
+            <select
+              value={form.estado}
+              onChange={(e) => setForm({ ...form, estado: e.target.value })}
+              style={styles.input}
+            >
               <option value="activa">Activa</option>
               <option value="proxima">Próxima</option>
               <option value="finalizada">Finalizada</option>
@@ -2771,7 +3222,9 @@ function Capacitaciones({
           <Empty text="Todavía no hay capacitaciones cargadas." />
         ) : (
           capacitaciones.map((capacitacion) => {
-            const inscriptos = inscripciones.filter((i) => i.capacitacionId === capacitacion.id);
+            const inscriptos = inscripciones.filter(
+              (i) => i.capacitacionId === capacitacion.id,
+            );
             const yaInscripto = comercioActual
               ? inscriptos.some((i) => i.comercioId === comercioActual.id)
               : false;
@@ -2780,19 +3233,44 @@ function Capacitaciones({
               <div key={capacitacion.id} style={styles.capacitacionCard}>
                 <div style={styles.capacitacionHeader}>
                   <div>
-                    <h3 style={styles.capacitacionTitle}>{capacitacion.titulo}</h3>
-                    <p style={styles.text}>{capacitacion.descripcion || "Sin descripción."}</p>
+                    <h3 style={styles.capacitacionTitle}>
+                      {capacitacion.titulo}
+                    </h3>
+                    <p style={styles.text}>
+                      {capacitacion.descripcion || "Sin descripción."}
+                    </p>
                   </div>
-                  <Badge danger={capacitacion.estado === "finalizada"}>{capacitacion.estado}</Badge>
+                  <Badge danger={capacitacion.estado === "finalizada"}>
+                    {capacitacion.estado}
+                  </Badge>
                 </div>
 
                 <div style={styles.capacitacionMetaGrid}>
-                  <span>Modalidad: <strong>{capacitacion.modalidad || "Sin dato"}</strong></span>
-                  <span>Lugar: <strong>{capacitacion.lugar || "Sin dato"}</strong></span>
-                  <span>Inicio: <strong>{capacitacion.fechaInicio ? formatDate(capacitacion.fechaInicio) : "Sin fecha"}</strong></span>
-                  <span>Cupos: <strong>{capacitacion.cupos ?? "Sin límite"}</strong></span>
-                  <span>Inscriptos: <strong>{inscriptos.length}</strong></span>
-                  <span>Destinatarios: <strong>{capacitacion.destinatarios || "Comercios"}</strong></span>
+                  <span>
+                    Modalidad:{" "}
+                    <strong>{capacitacion.modalidad || "Sin dato"}</strong>
+                  </span>
+                  <span>
+                    Lugar: <strong>{capacitacion.lugar || "Sin dato"}</strong>
+                  </span>
+                  <span>
+                    Inicio:{" "}
+                    <strong>
+                      {capacitacion.fechaInicio
+                        ? formatDate(capacitacion.fechaInicio)
+                        : "Sin fecha"}
+                    </strong>
+                  </span>
+                  <span>
+                    Cupos: <strong>{capacitacion.cupos ?? "Sin límite"}</strong>
+                  </span>
+                  <span>
+                    Inscriptos: <strong>{inscriptos.length}</strong>
+                  </span>
+                  <span>
+                    Destinatarios:{" "}
+                    <strong>{capacitacion.destinatarios || "Comercios"}</strong>
+                  </span>
                 </div>
 
                 {capacitacion.link && (
@@ -2804,7 +3282,15 @@ function Capacitaciones({
                     {yaInscripto ? (
                       <Badge>Ya inscripto</Badge>
                     ) : (
-                      <Button onClick={() => setInscripcionActiva(inscripcionActiva === capacitacion.id ? null : capacitacion.id)}>
+                      <Button
+                        onClick={() =>
+                          setInscripcionActiva(
+                            inscripcionActiva === capacitacion.id
+                              ? null
+                              : capacitacion.id,
+                          )
+                        }
+                      >
                         Inscribirme
                       </Button>
                     )}
@@ -2814,21 +3300,62 @@ function Capacitaciones({
                 {inscripcionActiva === capacitacion.id && !yaInscripto && (
                   <div style={styles.inscriptionBox}>
                     <div style={styles.formGridSmall}>
-                      <Input placeholder="Nombre de la persona" value={formInscripcion.nombre} onChange={(v) => setFormInscripcion({ ...formInscripcion, nombre: v })} />
-                      <Input placeholder="Teléfono" value={formInscripcion.telefono} onChange={(v) => setFormInscripcion({ ...formInscripcion, telefono: v })} />
-                      <Input placeholder="Observaciones" value={formInscripcion.observaciones} onChange={(v) => setFormInscripcion({ ...formInscripcion, observaciones: v })} />
+                      <Input
+                        placeholder="Nombre de la persona"
+                        value={formInscripcion.nombre}
+                        onChange={(v) =>
+                          setFormInscripcion({ ...formInscripcion, nombre: v })
+                        }
+                      />
+                      <Input
+                        placeholder="Teléfono"
+                        value={formInscripcion.telefono}
+                        onChange={(v) =>
+                          setFormInscripcion({
+                            ...formInscripcion,
+                            telefono: v,
+                          })
+                        }
+                      />
+                      <Input
+                        placeholder="Observaciones"
+                        value={formInscripcion.observaciones}
+                        onChange={(v) =>
+                          setFormInscripcion({
+                            ...formInscripcion,
+                            observaciones: v,
+                          })
+                        }
+                      />
                     </div>
                     <div style={styles.actions}>
-                      <Button onClick={() => inscribirse(capacitacion)}>Confirmar inscripción</Button>
-                      <SecondaryButton onClick={() => setInscripcionActiva(null)}>Cancelar</SecondaryButton>
+                      <Button onClick={() => inscribirse(capacitacion)}>
+                        Confirmar inscripción
+                      </Button>
+                      <SecondaryButton
+                        onClick={() => setInscripcionActiva(null)}
+                      >
+                        Cancelar
+                      </SecondaryButton>
                     </div>
                   </div>
                 )}
 
                 {esSecretaria && (
                   <div style={styles.actions}>
-                    <SecondaryButton onClick={() => cambiarEstadoCapacitacion(capacitacion, capacitacion.estado === "finalizada" ? "activa" : "finalizada")}>
-                      {capacitacion.estado === "finalizada" ? "Reactivar" : "Finalizar"}
+                    <SecondaryButton
+                      onClick={() =>
+                        cambiarEstadoCapacitacion(
+                          capacitacion,
+                          capacitacion.estado === "finalizada"
+                            ? "activa"
+                            : "finalizada",
+                        )
+                      }
+                    >
+                      {capacitacion.estado === "finalizada"
+                        ? "Reactivar"
+                        : "Finalizar"}
                     </SecondaryButton>
                   </div>
                 )}
@@ -2891,8 +3418,15 @@ function Reportes({
     });
 
     return Object.entries(mapa)
-      .map(([fecha, datos]) => ({ fecha, total: datos.total, cantidad: datos.cantidad }))
-      .sort((a, b) => parseFechaAR(a.fecha).getTime() - parseFechaAR(b.fecha).getTime());
+      .map(([fecha, datos]) => ({
+        fecha,
+        total: datos.total,
+        cantidad: datos.cantidad,
+      }))
+      .sort(
+        (a, b) =>
+          parseFechaAR(a.fecha).getTime() - parseFechaAR(b.fecha).getTime(),
+      );
   }, [ventas]);
 
   const ventasPorMes = useMemo(() => {
@@ -2909,7 +3443,10 @@ function Reportes({
       .sort((a, b) => {
         const [mesA, anioA] = a.mes.split("/").map(Number);
         const [mesB, anioB] = b.mes.split("/").map(Number);
-        return new Date(anioA, mesA - 1, 1).getTime() - new Date(anioB, mesB - 1, 1).getTime();
+        return (
+          new Date(anioA, mesA - 1, 1).getTime() -
+          new Date(anioB, mesB - 1, 1).getTime()
+        );
       });
   }, [ventas]);
 
@@ -2925,7 +3462,11 @@ function Reportes({
     });
 
     return Object.entries(mapa)
-      .map(([nombre, datos]) => ({ nombre, cantidad: datos.cantidad, total: datos.total }))
+      .map(([nombre, datos]) => ({
+        nombre,
+        cantidad: datos.cantidad,
+        total: datos.total,
+      }))
       .sort((a, b) => b.cantidad - a.cantidad);
   }, [ventas]);
 
@@ -2934,16 +3475,22 @@ function Reportes({
     ventas.forEach((venta) => {
       mapa[venta.medioPago] = (mapa[venta.medioPago] || 0) + venta.total;
     });
-    return Object.entries(mapa).map(([medio, total]) => ({ medio, total })).sort((a, b) => b.total - a.total);
+    return Object.entries(mapa)
+      .map(([medio, total]) => ({ medio, total }))
+      .sort((a, b) => b.total - a.total);
   }, [ventas]);
 
   const ventasPorDiaSemana = useMemo(() => {
     const mapa: Record<string, number> = {};
     ventas.forEach((venta) => {
-      const dia = new Date(venta.fecha).toLocaleDateString("es-AR", { weekday: "long" });
+      const dia = new Date(venta.fecha).toLocaleDateString("es-AR", {
+        weekday: "long",
+      });
       mapa[dia] = (mapa[dia] || 0) + venta.total;
     });
-    return Object.entries(mapa).map(([dia, total]) => ({ dia, total })).sort((a, b) => b.total - a.total);
+    return Object.entries(mapa)
+      .map(([dia, total]) => ({ dia, total }))
+      .sort((a, b) => b.total - a.total);
   }, [ventas]);
 
   const clientesRanking = useMemo(() => {
@@ -2955,39 +3502,66 @@ function Reportes({
         });
         const total = historial.reduce((acc, venta) => acc + venta.total, 0);
         const ticket = historial.length > 0 ? total / historial.length : 0;
-        return { nombre: cliente.nombre, cantidad: historial.length, total, ticket };
+        return {
+          nombre: cliente.nombre,
+          cantidad: historial.length,
+          total,
+          ticket,
+        };
       })
       .filter((cliente) => cliente.cantidad > 0)
       .sort((a, b) => b.total - a.total);
   }, [clientes, ventas]);
 
-  const ventasIdentificadas = ventas.filter((venta) => venta.cliente !== "Consumidor final").length;
+  const ventasIdentificadas = ventas.filter(
+    (venta) => venta.cliente !== "Consumidor final",
+  ).length;
   const ventasConsumidorFinal = ventas.length - ventasIdentificadas;
 
   const costoMercaderiaVendida = ventas.reduce((acc, venta) => {
-    return acc + venta.items.reduce((total, item) => {
-      const producto = productos.find((p) => p.id === item.productoId);
-      if (!producto) return total;
-      return total + producto.costo * item.cantidad;
-    }, 0);
+    return (
+      acc +
+      venta.items.reduce((total, item) => {
+        const producto = productos.find((p) => p.id === item.productoId);
+        if (!producto) return total;
+        return total + producto.costo * item.cantidad;
+      }, 0)
+    );
   }, 0);
 
   const margenBruto = ventasDelDia - costoMercaderiaVendida;
   const totalGastos = gastos.reduce((acc, gasto) => acc + gasto.monto, 0);
   const resultadoEstimado = margenBruto - totalGastos;
   const ticketPromedio = ventas.length > 0 ? ventasDelDia / ventas.length : 0;
-  const totalUltimos7Dias = ventasPorDia.slice(-7).reduce((acc, dia) => acc + dia.total, 0);
-  const promedioDiario = ventasPorDia.length > 0 ? ventasDelDia / ventasPorDia.length : 0;
-  const mejorDia = ventasPorDia.reduce((mejor, dia) => (dia.total > mejor.total ? dia : mejor), { fecha: "Sin datos", total: 0, cantidad: 0 });
+  const totalUltimos7Dias = ventasPorDia
+    .slice(-7)
+    .reduce((acc, dia) => acc + dia.total, 0);
+  const promedioDiario =
+    ventasPorDia.length > 0 ? ventasDelDia / ventasPorDia.length : 0;
+  const mejorDia = ventasPorDia.reduce(
+    (mejor, dia) => (dia.total > mejor.total ? dia : mejor),
+    { fecha: "Sin datos", total: 0, cantidad: 0 },
+  );
 
-  const idsVendidos = new Set(ventas.flatMap((venta) => venta.items.map((item) => item.productoId)));
-  const productosSinVentas = productos.filter((producto) => producto.activo && !idsVendidos.has(producto.id));
-  const productosFaltantes = productos.filter((producto) => producto.activo && producto.stock <= 0);
+  const idsVendidos = new Set(
+    ventas.flatMap((venta) => venta.items.map((item) => item.productoId)),
+  );
+  const productosSinVentas = productos.filter(
+    (producto) => producto.activo && !idsVendidos.has(producto.id),
+  );
+  const productosFaltantes = productos.filter(
+    (producto) => producto.activo && producto.stock <= 0,
+  );
 
   const rotacion = productos
     .map((producto) => {
       const vendido = ventas.reduce((acc, venta) => {
-        return acc + venta.items.filter((item) => item.productoId === producto.id).reduce((t, item) => t + item.cantidad, 0);
+        return (
+          acc +
+          venta.items
+            .filter((item) => item.productoId === producto.id)
+            .reduce((t, item) => t + item.cantidad, 0)
+        );
       }, 0);
       return { nombre: producto.nombre, vendido, stock: producto.stock };
     })
@@ -3002,7 +3576,10 @@ function Reportes({
 
   return (
     <>
-      <Header title="Reportes" subtitle="Ventas, stock, margen, gastos y flujo de caja." />
+      <Header
+        title="Reportes"
+        subtitle="Ventas, stock, margen, gastos y flujo de caja."
+      />
 
       <div style={styles.cardsGrid}>
         <Card title="Ventas totales" value={money(ventasDelDia)} />
@@ -3019,34 +3596,80 @@ function Reportes({
       </div>
 
       <div style={styles.cardsGrid}>
-        <Card title="Clientes con compras" value={String(clientesRanking.length)} />
-        <Card title="Ventas identificadas" value={String(ventasIdentificadas)} />
+        <Card
+          title="Clientes con compras"
+          value={String(clientesRanking.length)}
+        />
+        <Card
+          title="Ventas identificadas"
+          value={String(ventasIdentificadas)}
+        />
         <Card title="Consumidor final" value={String(ventasConsumidorFinal)} />
         <Card title="Clientes registrados" value={String(clientes.length)} />
       </div>
 
       <div style={styles.twoColumns}>
         <Panel title="Ventas diarias">
-          {ventasPorDia.length === 0 ? <Empty text="Todavía no hay ventas para graficar." /> : ventasPorDia.map((dia) => {
-            const ancho = maxVentaDiaria > 0 ? Math.max((dia.total / maxVentaDiaria) * 100, 4) : 0;
-            return <ChartRow key={dia.fecha} label={dia.fecha} value={money(dia.total)} width={ancho} />;
-          })}
+          {ventasPorDia.length === 0 ? (
+            <Empty text="Todavía no hay ventas para graficar." />
+          ) : (
+            ventasPorDia.map((dia) => {
+              const ancho =
+                maxVentaDiaria > 0
+                  ? Math.max((dia.total / maxVentaDiaria) * 100, 4)
+                  : 0;
+              return (
+                <ChartRow
+                  key={dia.fecha}
+                  label={dia.fecha}
+                  value={money(dia.total)}
+                  width={ancho}
+                />
+              );
+            })
+          )}
         </Panel>
 
         <Panel title="Comparación entre meses">
-          {ventasPorMes.length === 0 ? <Empty text="Todavía no hay meses para comparar." /> : ventasPorMes.map((mes) => {
-            const ancho = maxMes > 0 ? Math.max((mes.total / maxMes) * 100, 4) : 0;
-            return <ChartRow key={mes.mes} label={mes.mes} value={money(mes.total)} width={ancho} />;
-          })}
+          {ventasPorMes.length === 0 ? (
+            <Empty text="Todavía no hay meses para comparar." />
+          ) : (
+            ventasPorMes.map((mes) => {
+              const ancho =
+                maxMes > 0 ? Math.max((mes.total / maxMes) * 100, 4) : 0;
+              return (
+                <ChartRow
+                  key={mes.mes}
+                  label={mes.mes}
+                  value={money(mes.total)}
+                  width={ancho}
+                />
+              );
+            })
+          )}
         </Panel>
       </div>
 
       <div style={styles.twoColumns}>
         <Panel title="Clientes que más gastan">
-          {clientesRanking.length === 0 ? <Empty text="Todavía no hay clientes con compras." /> : clientesRanking.slice(0, 10).map((cliente) => {
-            const ancho = maxCliente > 0 ? Math.max((cliente.total / maxCliente) * 100, 4) : 0;
-            return <ChartRow key={cliente.nombre} label={`${cliente.nombre} (${cliente.cantidad} compras)`} value={money(cliente.total)} width={ancho} />;
-          })}
+          {clientesRanking.length === 0 ? (
+            <Empty text="Todavía no hay clientes con compras." />
+          ) : (
+            clientesRanking.slice(0, 10).map((cliente) => {
+              const ancho =
+                maxCliente > 0
+                  ? Math.max((cliente.total / maxCliente) * 100, 4)
+                  : 0;
+              return (
+                <ChartRow
+                  key={cliente.nombre}
+                  label={`${cliente.nombre} (${cliente.cantidad} compras)`}
+                  value={money(cliente.total)}
+                  width={ancho}
+                />
+              );
+            })
+          )}
         </Panel>
 
         <Panel title="Clientes frecuentes">
@@ -3070,17 +3693,45 @@ function Reportes({
 
       <div style={styles.twoColumns}>
         <Panel title="Días con más ventas">
-          {ventasPorDiaSemana.length === 0 ? <Empty text="Todavía no hay ventas registradas." /> : ventasPorDiaSemana.map((dia) => {
-            const ancho = maxDiaSemana > 0 ? Math.max((dia.total / maxDiaSemana) * 100, 4) : 0;
-            return <ChartRow key={dia.dia} label={dia.dia} value={money(dia.total)} width={ancho} />;
-          })}
+          {ventasPorDiaSemana.length === 0 ? (
+            <Empty text="Todavía no hay ventas registradas." />
+          ) : (
+            ventasPorDiaSemana.map((dia) => {
+              const ancho =
+                maxDiaSemana > 0
+                  ? Math.max((dia.total / maxDiaSemana) * 100, 4)
+                  : 0;
+              return (
+                <ChartRow
+                  key={dia.dia}
+                  label={dia.dia}
+                  value={money(dia.total)}
+                  width={ancho}
+                />
+              );
+            })
+          )}
         </Panel>
 
         <Panel title="Ventas por medio de pago">
-          {ventasPorMedioPago.length === 0 ? <Empty text="Todavía no hay medios de pago registrados." /> : ventasPorMedioPago.map((medio) => {
-            const ancho = maxMedioPago > 0 ? Math.max((medio.total / maxMedioPago) * 100, 4) : 0;
-            return <ChartRow key={medio.medio} label={medio.medio} value={money(medio.total)} width={ancho} />;
-          })}
+          {ventasPorMedioPago.length === 0 ? (
+            <Empty text="Todavía no hay medios de pago registrados." />
+          ) : (
+            ventasPorMedioPago.map((medio) => {
+              const ancho =
+                maxMedioPago > 0
+                  ? Math.max((medio.total / maxMedioPago) * 100, 4)
+                  : 0;
+              return (
+                <ChartRow
+                  key={medio.medio}
+                  label={medio.medio}
+                  value={money(medio.total)}
+                  width={ancho}
+                />
+              );
+            })
+          )}
         </Panel>
       </div>
 
@@ -3089,9 +3740,15 @@ function Reportes({
           {productosVendidos.length === 0 ? (
             <Empty text="Todavía no hay productos vendidos." />
           ) : (
-            productosVendidos.slice(0, 10).map((p) => (
-              <Row key={p.nombre} left={p.nombre} right={`${p.cantidad} unidades / ${money(p.total)}`} />
-            ))
+            productosVendidos
+              .slice(0, 10)
+              .map((p) => (
+                <Row
+                  key={p.nombre}
+                  left={p.nombre}
+                  right={`${p.cantidad} unidades / ${money(p.total)}`}
+                />
+              ))
           )}
         </Panel>
 
@@ -3099,36 +3756,75 @@ function Reportes({
           {rotacion.length === 0 ? (
             <Empty text="Todavía no hay rotación calculable." />
           ) : (
-            rotacion.slice(0, 10).map((p) => (
-              <Row key={p.nombre} left={p.nombre} right={`Vendidas: ${p.vendido} / Stock: ${p.stock}`} />
-            ))
+            rotacion
+              .slice(0, 10)
+              .map((p) => (
+                <Row
+                  key={p.nombre}
+                  left={p.nombre}
+                  right={`Vendidas: ${p.vendido} / Stock: ${p.stock}`}
+                />
+              ))
           )}
         </Panel>
       </div>
 
       <div style={styles.twoColumns}>
         <Panel title="Productos y stock">
-          <Row left="Stock disponible total" right={`${productos.reduce((acc, p) => acc + p.stock, 0)} unidades`} />
-          <Row left="Productos con poco stock" right={String(productosStockBajo.length)} />
-          <Row left="Productos faltantes" right={String(productosFaltantes.length)} />
-          <Row left="Productos sin ventas" right={String(productosSinVentas.length)} />
+          <Row
+            left="Stock disponible total"
+            right={`${productos.reduce((acc, p) => acc + p.stock, 0)} unidades`}
+          />
+          <Row
+            left="Productos con poco stock"
+            right={String(productosStockBajo.length)}
+          />
+          <Row
+            left="Productos faltantes"
+            right={String(productosFaltantes.length)}
+          />
+          <Row
+            left="Productos sin ventas"
+            right={String(productosSinVentas.length)}
+          />
         </Panel>
 
         <Panel title="Finanzas y flujo de caja">
           <Row left="Ingresos por ventas" right={money(ventasDelDia)} />
-          <Row left="Costos estimados de mercadería" right={money(costoMercaderiaVendida)} />
+          <Row
+            left="Costos estimados de mercadería"
+            right={money(costoMercaderiaVendida)}
+          />
           <Row left="Gastos del negocio" right={money(totalGastos)} />
-          <Row left="Flujo de caja actual" right={money(saldoCajaEstimado)} bold />
+          <Row
+            left="Flujo de caja actual"
+            right={money(saldoCajaEstimado)}
+            bold
+          />
         </Panel>
       </div>
 
       <div style={styles.twoColumns}>
         <Panel title="Productos con stock bajo">
-          {productosStockBajo.length === 0 ? <Empty text="No hay productos con stock bajo." /> : productosStockBajo.map((p) => <Row key={p.id} left={p.nombre} right={`Stock: ${p.stock}`} />)}
+          {productosStockBajo.length === 0 ? (
+            <Empty text="No hay productos con stock bajo." />
+          ) : (
+            productosStockBajo.map((p) => (
+              <Row key={p.id} left={p.nombre} right={`Stock: ${p.stock}`} />
+            ))
+          )}
         </Panel>
 
         <Panel title="Productos sin ventas">
-          {productosSinVentas.length === 0 ? <Empty text="No hay productos sin ventas." /> : productosSinVentas.slice(0, 10).map((p) => <Row key={p.id} left={p.nombre} right={`Stock: ${p.stock}`} />)}
+          {productosSinVentas.length === 0 ? (
+            <Empty text="No hay productos sin ventas." />
+          ) : (
+            productosSinVentas
+              .slice(0, 10)
+              .map((p) => (
+                <Row key={p.id} left={p.nombre} right={`Stock: ${p.stock}`} />
+              ))
+          )}
         </Panel>
       </div>
     </>
@@ -3164,7 +3860,13 @@ function Card({ title, value }: { title: string; value: string }) {
   );
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+function Panel({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <div style={styles.panel}>
       <h3 style={styles.panelTitle}>{title}</h3>
@@ -3211,7 +3913,13 @@ function Input({
   );
 }
 
-function Button({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+function Button({
+  children,
+  onClick,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
   return (
     <button onClick={onClick} style={styles.button}>
       {children}
@@ -3233,7 +3941,13 @@ function SecondaryButton({
   );
 }
 
-function Badge({ children, danger }: { children: React.ReactNode; danger?: boolean }) {
+function Badge({
+  children,
+  danger,
+}: {
+  children: React.ReactNode;
+  danger?: boolean;
+}) {
   return (
     <span
       style={{
@@ -3264,7 +3978,15 @@ function Row({
   );
 }
 
-function ChartRow({ label, value, width }: { label: string; value: string; width: number }) {
+function ChartRow({
+  label,
+  value,
+  width,
+}: {
+  label: string;
+  value: string;
+  width: number;
+}) {
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={styles.chartLabel}>
@@ -3365,7 +4087,8 @@ const styles: Record<string, React.CSSProperties> = {
     height: 180,
     right: -70,
     top: -40,
-    background: "radial-gradient(circle, rgba(220,38,38,0.58), transparent 64%)",
+    background:
+      "radial-gradient(circle, rgba(220,38,38,0.58), transparent 64%)",
     pointerEvents: "none",
   },
   sidebarHeaderBox: {
@@ -3810,6 +4533,81 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 16,
     padding: "6px 14px",
     marginBottom: 10,
+  },
+  saleCard: {
+    background: "#ffffff",
+    border: "1px solid #fecaca",
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 14,
+  },
+  saleHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+  },
+  saleTitleRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+    color: "#0f172a",
+  },
+  saleMeta: {
+    margin: "7px 0 0",
+    color: "#64748b",
+    fontSize: 13,
+  },
+  saleItems: {
+    marginTop: 12,
+    paddingTop: 4,
+    borderTop: "1px solid #fee2e2",
+  },
+  cancelledAmount: {
+    color: "#991b1b",
+    textDecoration: "line-through",
+  },
+  cancellationNotice: {
+    marginTop: 12,
+    padding: "11px 13px",
+    borderRadius: 14,
+    background: "#fff1f2",
+    border: "1px solid #fecdd3",
+    color: "#9f1239",
+    fontSize: 13,
+    lineHeight: 1.5,
+  },
+  modalBackdrop: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(2, 6, 23, 0.72)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+    zIndex: 1000,
+  },
+  modalBox: {
+    width: "min(520px, 100%)",
+    background: "white",
+    borderRadius: 24,
+    padding: 26,
+    boxShadow: "0 30px 90px rgba(0,0,0,0.38)",
+    border: "1px solid #fecaca",
+  },
+  textarea: {
+    border: "1px solid #fecaca",
+    borderRadius: 15,
+    padding: "12px 14px",
+    fontSize: 14,
+    width: "100%",
+    boxSizing: "border-box",
+    background: "#ffffff",
+    color: "#0f172a",
+    outline: "none",
+    resize: "vertical",
+    fontFamily: "inherit",
   },
   hr: {
     border: "none",

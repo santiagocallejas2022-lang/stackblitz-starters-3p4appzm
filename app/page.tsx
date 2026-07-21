@@ -37,6 +37,20 @@ type Producto = {
   activo: boolean;
 };
 
+type IngresoStock = {
+  id: number;
+  comercioId: number;
+  productoId: number;
+  productoNombre: string;
+  cantidad: number;
+  stockAnterior: number;
+  stockResultante: number;
+  observacion: string;
+  usuarioId: string | null;
+  emailUsuario: string;
+  createdAt: string;
+};
+
 type Cliente = {
   id: number;
   comercioId: number;
@@ -142,6 +156,16 @@ type InscripcionCapacitacion = {
   createdAt: string;
 };
 
+type NivelAlerta = "critica" | "advertencia" | "informativa";
+
+type AlertaComercio = {
+  id: string;
+  titulo: string;
+  detalle: string;
+  nivel: NivelAlerta;
+  seccion: Seccion;
+};
+
 const cajaVacia = (comercioId = 0): Caja => ({
   id: 0,
   comercioId,
@@ -167,6 +191,45 @@ function normalizarProducto(data: any): Producto {
   };
 }
 
+function normalizarIngresoStock(data: any): IngresoStock {
+  return {
+    id: data.id,
+    comercioId: data.comercio_id,
+    productoId: data.producto_id,
+    productoNombre: data.producto_nombre || "Producto",
+    cantidad: Number(data.cantidad || 0),
+    stockAnterior: Number(data.stock_anterior || 0),
+    stockResultante: Number(data.stock_resultante || 0),
+    observacion: data.observacion || "",
+    usuarioId: data.usuario_id || null,
+    emailUsuario: data.email_usuario || "",
+    createdAt: data.created_at,
+  };
+}
+
+function esFechaDeHoy(value?: string | null) {
+  if (!value) return false;
+
+  const hoy = new Date();
+  const anioHoy = hoy.getFullYear();
+  const mesHoy = hoy.getMonth();
+  const diaHoy = hoy.getDate();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [anio, mes, dia] = value.split("-").map(Number);
+    return anio === anioHoy && mes - 1 === mesHoy && dia === diaHoy;
+  }
+
+  const fecha = new Date(value);
+  if (Number.isNaN(fecha.getTime())) return false;
+
+  return (
+    fecha.getFullYear() === anioHoy &&
+    fecha.getMonth() === mesHoy &&
+    fecha.getDate() === diaHoy
+  );
+}
+
 export default function Home() {
   const [seccion, setSeccion] = useState<Seccion>("inicio");
   const [usuario, setUsuario] = useState<any>(null);
@@ -187,6 +250,7 @@ export default function Home() {
   const [registroDireccion, setRegistroDireccion] = useState("");
 
   const [productos, setProductos] = useState<Producto[]>([]);
+  const [ingresosStock, setIngresosStock] = useState<IngresoStock[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [movimientosCaja, setMovimientosCaja] = useState<MovimientoCaja[]>([]);
@@ -304,6 +368,7 @@ export default function Home() {
 
     await Promise.all([
       cargarProductos(idComercio),
+      cargarIngresosStock(idComercio),
       cargarClientes(idComercio),
       cargarCajasYMovimientos(idComercio),
       cargarVentas(idComercio),
@@ -325,6 +390,23 @@ export default function Home() {
     }
 
     setProductos((data || []).map((p: any) => normalizarProducto(p)));
+  }
+
+  async function cargarIngresosStock(comercioId: number) {
+    const { data, error } = await supabase
+      .from("ingresos_stock")
+      .select("*")
+      .eq("comercio_id", comercioId)
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (error) {
+      console.error("Error al cargar historial de stock:", error.message);
+      setIngresosStock([]);
+      return;
+    }
+
+    setIngresosStock((data || []).map((item: any) => normalizarIngresoStock(item)));
   }
 
   async function cargarClientes(comercioId: number) {
@@ -685,6 +767,7 @@ export default function Home() {
     setUsuario(null);
     setComercioActual(null);
     setProductos([]);
+    setIngresosStock([]);
     setClientes([]);
     setVentas([]);
     setMovimientosCaja([]);
@@ -710,6 +793,19 @@ export default function Home() {
   const productosStockBajo = productos.filter(
     (producto) => producto.activo && producto.stock < producto.minimo,
   );
+  const productosSinStock = productos.filter(
+    (producto) => producto.activo && producto.stock <= 0,
+  );
+  const productosConStockBajo = productosStockBajo.filter(
+    (producto) => producto.stock > 0,
+  );
+  const ventasHoy = ventasActivas
+    .filter((venta) => esFechaDeHoy(venta.fecha))
+    .reduce((acc, venta) => acc + venta.total, 0);
+  const gastosHoy = gastos
+    .filter((gasto) => esFechaDeHoy(gasto.fecha))
+    .reduce((acc, gasto) => acc + gasto.monto, 0);
+  const resultadoHoy = ventasHoy - gastosHoy;
 
   const ingresosCaja = movimientosCajaActual
     .filter((mov) => mov.tipo === "Ingreso")
@@ -722,6 +818,111 @@ export default function Home() {
   const saldoCajaEstimado = caja.abierta
     ? caja.saldoInicial + ingresosCaja - egresosCaja
     : 0;
+
+  const esSecretaria = rolUsuario === "admin_secretaria";
+  const alertasComercio: AlertaComercio[] = [];
+
+  if (!esSecretaria) {
+    if (productosSinStock.length > 0) {
+      alertasComercio.push({
+        id: "productos-sin-stock",
+        titulo: "Productos sin stock",
+        detalle: `${productosSinStock.length} ${productosSinStock.length === 1 ? "producto quedó" : "productos quedaron"} sin unidades disponibles.`,
+        nivel: "critica",
+        seccion: "productos",
+      });
+    }
+
+    if (productosConStockBajo.length > 0) {
+      alertasComercio.push({
+        id: "productos-stock-bajo",
+        titulo: "Stock por debajo del mínimo",
+        detalle: `${productosConStockBajo.length} ${productosConStockBajo.length === 1 ? "producto necesita" : "productos necesitan"} reposición.`,
+        nivel: "advertencia",
+        seccion: "productos",
+      });
+    }
+
+    if (caja.abierta) {
+      const abiertaDesdeOtroDia = !esFechaDeHoy(caja.fechaApertura);
+
+      alertasComercio.push({
+        id: "caja-abierta",
+        titulo: abiertaDesdeOtroDia
+          ? "Caja abierta desde un día anterior"
+          : "Caja actualmente abierta",
+        detalle: caja.fechaApertura
+          ? `La caja fue abierta el ${formatDate(caja.fechaApertura)}. Recordá cerrarla al finalizar la jornada.`
+          : "Hay una caja abierta. Recordá cerrarla al finalizar la jornada.",
+        nivel: abiertaDesdeOtroDia ? "critica" : "informativa",
+        seccion: "caja",
+      });
+    }
+
+    if (gastosHoy > ventasHoy && gastosHoy > 0) {
+      alertasComercio.push({
+        id: "resultado-diario-negativo",
+        titulo: "Los gastos de hoy superan las ventas",
+        detalle: `Ventas de hoy: ${money(ventasHoy)} · Gastos de hoy: ${money(gastosHoy)} · Diferencia: ${money(resultadoHoy)}.`,
+        nivel: "advertencia",
+        seccion: "gastos",
+      });
+    }
+
+    const inicioDeHoy = new Date();
+    inicioDeHoy.setHours(0, 0, 0, 0);
+
+    const capacitacionesDisponibles = capacitaciones
+      .filter((capacitacion) => capacitacion.estado !== "finalizada")
+      .filter((capacitacion) => {
+        if (!capacitacion.fechaFin) return true;
+
+        const fechaFin = new Date(capacitacion.fechaFin);
+        return (
+          Number.isNaN(fechaFin.getTime()) ||
+          fechaFin.getTime() >= inicioDeHoy.getTime()
+        );
+      })
+      .filter(
+        (capacitacion) =>
+          !inscripcionesCapacitaciones.some(
+            (inscripcion) =>
+              inscripcion.capacitacionId === capacitacion.id &&
+              inscripcion.comercioId === comercioActual?.id,
+          ),
+      )
+      .sort((a, b) => {
+        const fechaA = a.fechaInicio
+          ? new Date(a.fechaInicio).getTime()
+          : Number.POSITIVE_INFINITY;
+        const fechaB = b.fechaInicio
+          ? new Date(b.fechaInicio).getTime()
+          : Number.POSITIVE_INFINITY;
+
+        return fechaA - fechaB;
+      })
+      .slice(0, 5);
+
+    capacitacionesDisponibles.forEach((capacitacion) => {
+      const detalle = [
+        capacitacion.modalidad || "Modalidad a confirmar",
+        capacitacion.fechaInicio
+          ? `Inicio: ${formatDate(capacitacion.fechaInicio)}`
+          : "Fecha a confirmar",
+        capacitacion.lugar ? `Lugar: ${capacitacion.lugar}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
+      alertasComercio.push({
+        id: `capacitacion-${capacitacion.id}`,
+        titulo: `Capacitación disponible: ${capacitacion.titulo}`,
+        detalle,
+        nivel: "informativa",
+        seccion: "capacitaciones",
+      });
+    });
+  }
 
   if (cargandoUsuario) {
     return (
@@ -874,6 +1075,9 @@ export default function Home() {
               ventas={ventasActivas}
               saldoCajaEstimado={saldoCajaEstimado}
               ventasCajaActual={ventasCajaActual}
+              alertas={alertasComercio}
+              mostrarCentroAlertas={!esSecretaria}
+              setSeccion={setSeccion}
             />
           )}
 
@@ -888,7 +1092,9 @@ export default function Home() {
             <Productos
               productos={productos}
               setProductos={setProductos}
+              ingresosStock={ingresosStock}
               comercioActual={comercioActual}
+              recargarDatos={cargarDatos}
             />
           )}
 
@@ -1193,6 +1399,9 @@ function Inicio({
   ventas,
   saldoCajaEstimado,
   ventasCajaActual,
+  alertas,
+  mostrarCentroAlertas,
+  setSeccion,
 }: {
   comercioActual: Comercio | null;
   ventasDelDia: number;
@@ -1202,7 +1411,12 @@ function Inicio({
   ventas: Venta[];
   saldoCajaEstimado: number;
   ventasCajaActual: Venta[];
+  alertas: AlertaComercio[];
+  mostrarCentroAlertas: boolean;
+  setSeccion: (seccion: Seccion) => void;
 }) {
+  const [mostrarAlertas, setMostrarAlertas] = useState(true);
+
   return (
     <>
       <Header
@@ -1212,7 +1426,118 @@ function Inicio({
             ? `Resumen operativo de ${comercioActual.nombre}.`
             : "Resumen operativo del comercio."
         }
+        action={
+          mostrarCentroAlertas ? (
+            <button
+              type="button"
+              style={styles.alertBellButton}
+              onClick={() => setMostrarAlertas((valor) => !valor)}
+              aria-label="Mostrar u ocultar alertas y novedades"
+              aria-expanded={mostrarAlertas}
+            >
+              <span aria-hidden="true">🔔</span>
+              <span>Alertas</span>
+              <span style={styles.alertBellCount}>{alertas.length}</span>
+            </button>
+          ) : undefined
+        }
       />
+
+      {mostrarCentroAlertas && mostrarAlertas && (
+        <div style={styles.alertsPanel}>
+          <div style={styles.alertsHeader}>
+            <div>
+              <h3 style={styles.alertsTitle}>Alertas y novedades</h3>
+              <p style={styles.alertsSubtitle}>
+                Avisos operativos y capacitaciones disponibles para el comercio.
+              </p>
+            </div>
+
+            <span
+              style={{
+                ...styles.badge,
+                background: alertas.length === 0 ? "#dcfce7" : "#ffedd5",
+                color: alertas.length === 0 ? "#166534" : "#9a3412",
+              }}
+            >
+              {alertas.length === 0
+                ? "Todo en orden"
+                : `${alertas.length} ${alertas.length === 1 ? "aviso" : "avisos"}`}
+            </span>
+          </div>
+
+          {alertas.length === 0 ? (
+            <Empty text="No hay alertas ni novedades activas en este momento." />
+          ) : (
+            <div style={styles.alertList}>
+              {alertas.map((alerta) => {
+                const apariencia =
+                  alerta.nivel === "critica"
+                    ? {
+                        icono: "!",
+                        fondo: "#fff1f2",
+                        borde: "#fecdd3",
+                        color: "#be123c",
+                      }
+                    : alerta.nivel === "advertencia"
+                      ? {
+                          icono: "▲",
+                          fondo: "#fff7ed",
+                          borde: "#fed7aa",
+                          color: "#c2410c",
+                        }
+                      : {
+                          icono: "i",
+                          fondo: "#eff6ff",
+                          borde: "#bfdbfe",
+                          color: "#1d4ed8",
+                        };
+
+                return (
+                  <div
+                    key={alerta.id}
+                    style={{
+                      ...styles.alertItem,
+                      background: apariencia.fondo,
+                      borderColor: apariencia.borde,
+                    }}
+                  >
+                    <span
+                      style={{
+                        ...styles.alertIcon,
+                        background: apariencia.color,
+                      }}
+                      aria-hidden="true"
+                    >
+                      {apariencia.icono}
+                    </span>
+
+                    <div style={styles.alertContent}>
+                      <strong
+                        style={{
+                          ...styles.alertTitle,
+                          color: apariencia.color,
+                        }}
+                      >
+                        {alerta.titulo}
+                      </strong>
+                      <p style={styles.alertDetail}>{alerta.detalle}</p>
+                    </div>
+
+                    <button
+                      type="button"
+                      style={styles.smallButton}
+                      onClick={() => setSeccion(alerta.seccion)}
+                    >
+                      Ver detalle
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={styles.cardsGrid}>
         <Card title="Ventas totales" value={money(ventasDelDia)} />
@@ -1279,16 +1604,26 @@ function Inicio({
 function Productos({
   productos,
   setProductos,
+  ingresosStock,
   comercioActual,
+  recargarDatos,
 }: {
   productos: Producto[];
   setProductos: (productos: Producto[]) => void;
+  ingresosStock: IngresoStock[];
   comercioActual: Comercio | null;
+  recargarDatos: () => Promise<void>;
 }) {
   const [mostrarFormulario, setMostrarFormulario] = useState(false);
   const [productoEditando, setProductoEditando] = useState<Producto | null>(
     null,
   );
+  const [productoParaStock, setProductoParaStock] = useState<Producto | null>(
+    null,
+  );
+  const [cantidadIngresoStock, setCantidadIngresoStock] = useState("");
+  const [observacionIngresoStock, setObservacionIngresoStock] = useState("");
+  const [guardandoIngresoStock, setGuardandoIngresoStock] = useState(false);
 
   const [form, setForm] = useState({
     nombre: "",
@@ -1424,6 +1759,54 @@ function Productos({
     );
 
     limpiarFormulario();
+  }
+
+  function iniciarIngresoStock(producto: Producto) {
+    setProductoParaStock(producto);
+    setCantidadIngresoStock("");
+    setObservacionIngresoStock("");
+  }
+
+  function cancelarIngresoStock() {
+    if (guardandoIngresoStock) return;
+    setProductoParaStock(null);
+    setCantidadIngresoStock("");
+    setObservacionIngresoStock("");
+  }
+
+  async function confirmarIngresoStock() {
+    if (!comercioActual || !productoParaStock) {
+      alert("No hay producto seleccionado.");
+      return;
+    }
+
+    const cantidad = Number(cantidadIngresoStock);
+
+    if (!Number.isInteger(cantidad) || cantidad <= 0) {
+      alert("Ingresá una cantidad entera mayor a cero.");
+      return;
+    }
+
+    setGuardandoIngresoStock(true);
+
+    const { error } = await supabase.rpc("registrar_ingreso_stock", {
+      p_producto_id: productoParaStock.id,
+      p_cantidad: cantidad,
+      p_observacion: observacionIngresoStock.trim() || null,
+    });
+
+    setGuardandoIngresoStock(false);
+
+    if (error) {
+      alert("Error al agregar stock: " + error.message);
+      return;
+    }
+
+    setProductoParaStock(null);
+    setCantidadIngresoStock("");
+    setObservacionIngresoStock("");
+    await recargarDatos();
+    alert("Stock agregado y movimiento registrado correctamente.");
   }
 
   async function cambiarEstadoProducto(producto: Producto) {
@@ -1592,7 +1975,14 @@ function Productos({
                   )}
                 </Td>
                 <Td>
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      style={styles.smallButtonAlt}
+                      onClick={() => iniciarIngresoStock(producto)}
+                    >
+                      + Stock
+                    </button>
+
                     <button
                       style={styles.smallButton}
                       onClick={() => iniciarEdicion(producto)}
@@ -1617,6 +2007,80 @@ function Productos({
           })}
         </tbody>
       </Table>
+
+      <Panel title="Historial de ingresos de stock">
+        {ingresosStock.length === 0 ? (
+          <Empty text="Todavía no hay ingresos de mercadería registrados." />
+        ) : (
+          ingresosStock.map((ingreso) => (
+            <div key={ingreso.id} style={styles.stockHistoryItem}>
+              <div>
+                <strong style={styles.stockHistoryTitle}>
+                  {ingreso.productoNombre}
+                </strong>
+                <p style={styles.stockHistoryMeta}>
+                  {formatDate(ingreso.createdAt)}
+                  {ingreso.emailUsuario ? ` · ${ingreso.emailUsuario}` : ""}
+                  {ingreso.observacion ? ` · ${ingreso.observacion}` : ""}
+                </p>
+              </div>
+              <div style={styles.stockHistoryNumbers}>
+                <strong>+{ingreso.cantidad}</strong>
+                <span>
+                  {ingreso.stockAnterior} → {ingreso.stockResultante}
+                </span>
+              </div>
+            </div>
+          ))
+        )}
+      </Panel>
+
+      {productoParaStock && (
+        <div style={styles.modalBackdrop}>
+          <div style={styles.modalBox}>
+            <h3 style={styles.panelTitle}>Agregar stock</h3>
+            <p style={styles.text}>
+              Producto: <strong>{productoParaStock.nombre}</strong>
+            </p>
+            <p style={styles.text}>
+              Stock actual: <strong>{productoParaStock.stock}</strong>
+            </p>
+
+            <Input
+              placeholder="Cantidad recibida"
+              type="number"
+              value={cantidadIngresoStock}
+              onChange={setCantidadIngresoStock}
+            />
+
+            <div style={{ marginTop: 12 }}>
+              <Input
+                placeholder="Observación opcional (ej.: compra a proveedor)"
+                value={observacionIngresoStock}
+                onChange={setObservacionIngresoStock}
+              />
+            </div>
+
+            {Number(cantidadIngresoStock) > 0 && (
+              <p style={styles.stockPreview}>
+                Nuevo stock: {productoParaStock.stock} + {Number(cantidadIngresoStock)} ={" "}
+                <strong>
+                  {productoParaStock.stock + Number(cantidadIngresoStock)}
+                </strong>
+              </p>
+            )}
+
+            <div style={styles.actions}>
+              <Button onClick={confirmarIngresoStock}>
+                {guardandoIngresoStock ? "Guardando..." : "Confirmar ingreso"}
+              </Button>
+              <SecondaryButton onClick={cancelarIngresoStock}>
+                Cancelar
+              </SecondaryButton>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -2437,7 +2901,7 @@ function Ventas({
         items: carrito,
       },
     ]);
-
+    
     setMovimientosCaja((prev) => [
       ...prev,
       {
@@ -4244,6 +4708,97 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 18,
     marginBottom: 24,
   },
+  alertBellButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 9,
+    border: "1px solid #fecaca",
+    borderRadius: 999,
+    padding: "10px 14px",
+    background: "rgba(255,255,255,0.96)",
+    color: "#7f1d1d",
+    fontWeight: 950,
+    cursor: "pointer",
+    boxShadow: "0 10px 24px rgba(127, 29, 29, 0.12)",
+  },
+  alertBellCount: {
+    minWidth: 25,
+    height: 25,
+    borderRadius: 999,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "#dc2626",
+    color: "white",
+    fontSize: 12,
+    fontWeight: 950,
+  },
+  alertsPanel: {
+    background: "rgba(255,255,255,0.97)",
+    padding: 24,
+    borderRadius: 26,
+    boxShadow: "0 16px 42px rgba(127, 29, 29, 0.09)",
+    border: "1px solid rgba(254, 202, 202, 0.96)",
+    marginBottom: 24,
+  },
+  alertsHeader: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 16,
+    marginBottom: 16,
+  },
+  alertsTitle: {
+    color: "#111827",
+    margin: 0,
+    fontSize: 20,
+    fontWeight: 950,
+    letterSpacing: "-0.03em",
+  },
+  alertsSubtitle: {
+    color: "#64748b",
+    margin: "7px 0 0",
+    fontSize: 14,
+    lineHeight: 1.5,
+  },
+  alertList: {
+    display: "grid",
+    gap: 12,
+  },
+  alertItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 14,
+    border: "1px solid",
+    borderRadius: 18,
+    padding: 15,
+  },
+  alertIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 999,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    color: "white",
+    fontWeight: 950,
+  },
+  alertContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+  alertTitle: {
+    display: "block",
+    fontSize: 15,
+    fontWeight: 950,
+  },
+  alertDetail: {
+    color: "#475569",
+    margin: "5px 0 0",
+    fontSize: 13,
+    lineHeight: 1.5,
+  },
   panel: {
     background: "rgba(255,255,255,0.97)",
     padding: 26,
@@ -4608,6 +5163,41 @@ const styles: Record<string, React.CSSProperties> = {
     outline: "none",
     resize: "vertical",
     fontFamily: "inherit",
+  },
+  stockHistoryItem: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 16,
+    padding: "14px 0",
+    borderBottom: "1px solid #fee2e2",
+  },
+  stockHistoryTitle: {
+    color: "#0f172a",
+    fontSize: 15,
+  },
+  stockHistoryMeta: {
+    margin: "5px 0 0",
+    color: "#64748b",
+    fontSize: 12,
+    lineHeight: 1.45,
+  },
+  stockHistoryNumbers: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end",
+    gap: 4,
+    color: "#166534",
+    whiteSpace: "nowrap",
+  },
+  stockPreview: {
+    marginTop: 14,
+    padding: "12px 14px",
+    borderRadius: 14,
+    background: "#f0fdf4",
+    border: "1px solid #bbf7d0",
+    color: "#166534",
+    fontSize: 14,
   },
   hr: {
     border: "none",

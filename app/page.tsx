@@ -2691,9 +2691,127 @@ function Ventas({
   const [ventaAnulando, setVentaAnulando] = useState<Venta | null>(null);
   const [motivoAnulacion, setMotivoAnulacion] = useState("");
   const [anulandoVenta, setAnulandoVenta] = useState(false);
+  const [busquedaRapida, setBusquedaRapida] = useState("");
+  const [categoriaSeleccionada, setCategoriaSeleccionada] = useState("Todos");
+  const [mostrarCargaManual, setMostrarCargaManual] = useState(false);
 
   const total = carrito.reduce((acc, item) => acc + item.subtotal, 0);
   const puedeAnularVentas = rolUsuario === "admin_comercio";
+  const productosActivos = productos.filter((producto) => producto.activo);
+  const categorias = [
+    "Todos",
+    ...Array.from(
+      new Set(
+        productosActivos
+          .map((producto) => producto.categoria?.trim())
+          .filter((categoria): categoria is string => Boolean(categoria)),
+      ),
+    ).sort((a, b) => a.localeCompare(b)),
+  ];
+
+  const terminoBusqueda = busquedaRapida.trim().toLowerCase();
+  const productosFiltrados = productosActivos.filter((producto) => {
+    const coincideCategoria =
+      categoriaSeleccionada === "Todos" ||
+      producto.categoria === categoriaSeleccionada;
+    const coincideBusqueda =
+      !terminoBusqueda ||
+      producto.nombre.toLowerCase().includes(terminoBusqueda) ||
+      producto.categoria.toLowerCase().includes(terminoBusqueda) ||
+      producto.codigo.toLowerCase().includes(terminoBusqueda);
+
+    return coincideCategoria && coincideBusqueda;
+  });
+
+  const cantidadesVendidas = new Map<number, number>();
+  ventas
+    .filter((venta) => venta.estado !== "anulada")
+    .forEach((venta) => {
+      venta.items.forEach((item) => {
+        cantidadesVendidas.set(
+          item.productoId,
+          (cantidadesVendidas.get(item.productoId) || 0) + item.cantidad,
+        );
+      });
+    });
+
+  const productosMasVendidos = productosActivos
+    .filter((producto) => (cantidadesVendidas.get(producto.id) || 0) > 0)
+    .sort(
+      (a, b) =>
+        (cantidadesVendidas.get(b.id) || 0) -
+        (cantidadesVendidas.get(a.id) || 0),
+    )
+    .slice(0, 6);
+
+  const accesosRapidos =
+    productosMasVendidos.length > 0
+      ? productosMasVendidos
+      : productosActivos.filter((producto) => producto.stock > 0).slice(0, 6);
+
+  function cantidadEnCarrito(productoIdBuscado: number) {
+    return carrito
+      .filter((item) => item.productoId === productoIdBuscado)
+      .reduce((acc, item) => acc + item.cantidad, 0);
+  }
+
+  function agregarProductoRapido(producto: Producto, cantidadAgregar = 1) {
+    if (!producto.activo) {
+      alert("El producto está inactivo.");
+      return false;
+    }
+
+    if (producto.stock <= 0) {
+      alert(`${producto.nombre} no tiene stock disponible.`);
+      return false;
+    }
+
+    if (!cantidadAgregar || cantidadAgregar <= 0) {
+      alert("La cantidad debe ser mayor a cero.");
+      return false;
+    }
+
+    const cantidadActual = cantidadEnCarrito(producto.id);
+
+    if (cantidadActual + cantidadAgregar > producto.stock) {
+      alert(
+        `No hay stock suficiente de ${producto.nombre}. Disponibles: ${producto.stock}.`,
+      );
+      return false;
+    }
+
+    const itemExistente = carrito.find(
+      (item) => item.productoId === producto.id,
+    );
+
+    if (itemExistente) {
+      setCarrito(
+        carrito.map((item) =>
+          item.productoId === producto.id
+            ? {
+                ...item,
+                cantidad: item.cantidad + cantidadAgregar,
+                subtotal:
+                  item.precioUnitario * (item.cantidad + cantidadAgregar),
+              }
+            : item,
+        ),
+      );
+    } else {
+      setCarrito([
+        ...carrito,
+        {
+          productoId: producto.id,
+          nombre: producto.nombre,
+          cantidad: cantidadAgregar,
+          precioUnitario: producto.precio,
+          subtotal: producto.precio * cantidadAgregar,
+        },
+      ]);
+    }
+
+    return true;
+  }
 
   function cambiarCantidadCarrito(index: number, valor: string) {
     const nuevaCantidad = Number(valor);
@@ -2751,38 +2869,43 @@ function Ventas({
       return;
     }
 
-    if (!producto.activo) {
-      alert("El producto está inactivo.");
+    const agregado = agregarProductoRapido(producto, cant);
+
+    if (agregado) {
+      setProductoId("");
+      setCantidad("1");
+    }
+  }
+
+  function manejarBusquedaRapida(
+    event: React.KeyboardEvent<HTMLInputElement>,
+  ) {
+    if (event.key !== "Enter") return;
+
+    event.preventDefault();
+
+    const productoExacto = productosFiltrados.find(
+      (producto) =>
+        producto.nombre.toLowerCase() === terminoBusqueda ||
+        producto.codigo.toLowerCase() === terminoBusqueda,
+    );
+
+    if (productoExacto) {
+      agregarProductoRapido(productoExacto);
       return;
     }
 
-    if (!cant || cant <= 0) {
-      alert("La cantidad debe ser mayor a cero.");
+    if (productosFiltrados.length === 1) {
+      agregarProductoRapido(productosFiltrados[0]);
       return;
     }
 
-    const cantidadYaEnCarrito = carrito
-      .filter((item) => item.productoId === producto.id)
-      .reduce((acc, item) => acc + item.cantidad, 0);
-
-    if (cant + cantidadYaEnCarrito > producto.stock) {
-      alert("No hay stock suficiente.");
+    if (productosFiltrados.length === 0) {
+      alert("No se encontró ningún producto con esa búsqueda.");
       return;
     }
 
-    setCarrito([
-      ...carrito,
-      {
-        productoId: producto.id,
-        nombre: producto.nombre,
-        cantidad: cant,
-        precioUnitario: producto.precio,
-        subtotal: producto.precio * cant,
-      },
-    ]);
-
-    setProductoId("");
-    setCantidad("1");
+    alert("Hay varios resultados. Tocá el producto que querés agregar.");
   }
 
   async function confirmarVenta() {
@@ -2901,7 +3024,7 @@ function Ventas({
         items: carrito,
       },
     ]);
-    
+
     setMovimientosCaja((prev) => [
       ...prev,
       {
@@ -2917,6 +3040,8 @@ function Ventas({
     ]);
 
     setCarrito([]);
+    setBusquedaRapida("");
+    setCategoriaSeleccionada("Todos");
     await recargarDatos();
     alert("Venta registrada correctamente.");
   }
@@ -2993,7 +3118,7 @@ function Ventas({
     <>
       <Header
         title="Ventas"
-        subtitle="Registro de ventas y descuento automático de stock."
+        subtitle="Venta rápida, carrito y descuento automático de stock."
       />
 
       <div style={styles.twoColumns}>
@@ -3010,31 +3135,154 @@ function Ventas({
             </p>
           )}
 
-          <div style={styles.formGridSmall}>
-            <select
-              value={productoId}
-              onChange={(e) => setProductoId(e.target.value)}
-              style={styles.input}
-            >
-              <option value="">Seleccionar producto</option>
-              {productos
-                .filter((producto) => producto.activo)
-                .map((producto) => (
-                  <option key={producto.id} value={producto.id}>
-                    {producto.nombre} - Stock: {producto.stock}
-                  </option>
-                ))}
-            </select>
-
-            <Input
-              placeholder="Cantidad"
-              type="number"
-              value={cantidad}
-              onChange={setCantidad}
-            />
-
-            <Button onClick={agregarAlCarrito}>Agregar</Button>
+          <div style={styles.quickSaleHeader}>
+            <div>
+              <h3 style={styles.quickSaleTitle}>Venta rápida</h3>
+              <p style={styles.quickSaleHelp}>
+                Buscá o tocá un producto. Cada toque suma una unidad al carrito.
+              </p>
+            </div>
+            <Badge>{productosFiltrados.length} productos</Badge>
           </div>
+
+          <input
+            value={busquedaRapida}
+            onChange={(event) => setBusquedaRapida(event.target.value)}
+            onKeyDown={manejarBusquedaRapida}
+            placeholder="Buscar por nombre o categoría..."
+            style={styles.quickSearchInput}
+            autoComplete="off"
+          />
+
+          <div style={styles.categoryTabs}>
+            {categorias.map((categoria) => {
+              const activa = categoriaSeleccionada === categoria;
+
+              return (
+                <button
+                  key={categoria}
+                  type="button"
+                  onClick={() => setCategoriaSeleccionada(categoria)}
+                  style={{
+                    ...styles.categoryTab,
+                    ...(activa ? styles.categoryTabActive : {}),
+                  }}
+                >
+                  {categoria}
+                </button>
+              );
+            })}
+          </div>
+
+          {!terminoBusqueda && categoriaSeleccionada === "Todos" && (
+            <div style={styles.quickAccessBox}>
+              <p style={styles.quickAccessTitle}>
+                {productosMasVendidos.length > 0
+                  ? "Más vendidos"
+                  : "Accesos rápidos"}
+              </p>
+              <div style={styles.quickAccessButtons}>
+                {accesosRapidos.map((producto) => (
+                  <button
+                    key={`acceso-${producto.id}`}
+                    type="button"
+                    onClick={() => agregarProductoRapido(producto)}
+                    disabled={producto.stock <= 0}
+                    style={{
+                      ...styles.quickAccessButton,
+                      ...(producto.stock <= 0 ? styles.disabledButton : {}),
+                    }}
+                  >
+                    {producto.nombre}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {productosFiltrados.length === 0 ? (
+            <Empty text="No hay productos que coincidan con la búsqueda." />
+          ) : (
+            <div style={styles.quickProductGrid}>
+              {productosFiltrados.map((producto) => {
+                const sinStock = producto.stock <= 0;
+                const unidadesEnCarrito = cantidadEnCarrito(producto.id);
+
+                return (
+                  <button
+                    key={producto.id}
+                    type="button"
+                    onClick={() => agregarProductoRapido(producto)}
+                    disabled={sinStock}
+                    style={{
+                      ...styles.quickProductCard,
+                      ...(sinStock ? styles.quickProductCardDisabled : {}),
+                    }}
+                  >
+                    <span style={styles.quickProductName}>{producto.nombre}</span>
+                    <span style={styles.quickProductCategory}>
+                      {producto.categoria || "Sin categoría"}
+                    </span>
+                    <span style={styles.quickProductPrice}>
+                      {money(producto.precio)}
+                    </span>
+                    <span
+                      style={{
+                        ...styles.quickProductStock,
+                        ...(sinStock ? styles.quickProductStockEmpty : {}),
+                      }}
+                    >
+                      {sinStock ? "Sin stock" : `Stock: ${producto.stock}`}
+                    </span>
+                    {unidadesEnCarrito > 0 && (
+                      <span style={styles.quickProductCartCount}>
+                        En carrito: {unidadesEnCarrito}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={styles.manualLoadToggle}>
+            <SecondaryButton
+              onClick={() => setMostrarCargaManual(!mostrarCargaManual)}
+            >
+              {mostrarCargaManual
+                ? "Ocultar carga por cantidad"
+                : "Agregar varias unidades de un producto"}
+            </SecondaryButton>
+          </div>
+
+          {mostrarCargaManual && (
+            <div style={styles.manualLoadBox}>
+              <p style={styles.quickAccessTitle}>Carga por cantidad</p>
+              <div style={styles.formGridSmall}>
+                <select
+                  value={productoId}
+                  onChange={(e) => setProductoId(e.target.value)}
+                  style={styles.input}
+                >
+                  <option value="">Seleccionar producto</option>
+                  {productosActivos.map((producto) => (
+                    <option key={producto.id} value={producto.id}>
+                      {producto.nombre} - Stock: {producto.stock}
+                    </option>
+                  ))}
+                </select>
+
+                <Input
+                  placeholder="Cantidad"
+                  type="number"
+                  value={cantidad}
+                  onChange={setCantidad}
+                />
+
+                <Button onClick={agregarAlCarrito}>Agregar</Button>
+              </div>
+            </div>
+          )}
 
           <div style={{ marginTop: 20 }}>
             <select
@@ -3073,7 +3321,7 @@ function Ventas({
           ) : (
             <>
               {carrito.map((item, index) => (
-                <div key={index} style={styles.cartItem}>
+                <div key={item.productoId} style={styles.cartItem}>
                   <div>
                     <strong>{item.nombre}</strong>
                     <p style={styles.cartMeta}>
@@ -3081,15 +3329,35 @@ function Ventas({
                     </p>
                   </div>
 
-                  <input
-                    style={styles.qtyInput}
-                    type="number"
-                    min="1"
-                    value={item.cantidad}
-                    onChange={(e) =>
-                      cambiarCantidadCarrito(index, e.target.value)
-                    }
-                  />
+                  <div style={styles.qtyStepper}>
+                    <button
+                      type="button"
+                      style={styles.qtyStepperButton}
+                      onClick={() =>
+                        cambiarCantidadCarrito(
+                          index,
+                          String(item.cantidad - 1),
+                        )
+                      }
+                      aria-label={`Restar una unidad de ${item.nombre}`}
+                    >
+                      −
+                    </button>
+                    <strong style={styles.qtyStepperValue}>{item.cantidad}</strong>
+                    <button
+                      type="button"
+                      style={styles.qtyStepperButton}
+                      onClick={() =>
+                        cambiarCantidadCarrito(
+                          index,
+                          String(item.cantidad + 1),
+                        )
+                      }
+                      aria-label={`Sumar una unidad de ${item.nombre}`}
+                    >
+                      +
+                    </button>
+                  </div>
 
                   <strong>{money(item.subtotal)}</strong>
 
@@ -5022,7 +5290,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   cartItem: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) 90px 120px auto",
+    gridTemplateColumns: "minmax(0, 1fr) 132px 120px auto",
     gap: 12,
     alignItems: "center",
     padding: "12px 0",
@@ -5043,6 +5311,192 @@ const styles: Record<string, React.CSSProperties> = {
     background: "white",
     color: "#0f172a",
     outline: "none",
+  },
+  quickSaleHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+    marginTop: 18,
+    marginBottom: 12,
+  },
+  quickSaleTitle: {
+    margin: 0,
+    color: "#111827",
+    fontSize: 18,
+    fontWeight: 950,
+    letterSpacing: "-0.03em",
+  },
+  quickSaleHelp: {
+    margin: "5px 0 0",
+    color: "#64748b",
+    fontSize: 13,
+    lineHeight: 1.5,
+  },
+  quickSearchInput: {
+    border: "2px solid #fecaca",
+    borderRadius: 17,
+    padding: "14px 16px",
+    fontSize: 16,
+    width: "100%",
+    boxSizing: "border-box",
+    background: "#ffffff",
+    color: "#0f172a",
+    outline: "none",
+    boxShadow: "0 8px 22px rgba(127, 29, 29, 0.08)",
+  },
+  categoryTabs: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+    margin: "14px 0",
+  },
+  categoryTab: {
+    border: "1px solid #fecaca",
+    borderRadius: 999,
+    padding: "8px 12px",
+    background: "#fff7f7",
+    color: "#7f1d1d",
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+  categoryTabActive: {
+    background: "#991b1b",
+    color: "#ffffff",
+    borderColor: "#991b1b",
+    boxShadow: "0 7px 18px rgba(153, 27, 27, 0.22)",
+  },
+  quickAccessBox: {
+    background: "#fff7f7",
+    border: "1px solid #fecaca",
+    borderRadius: 17,
+    padding: 13,
+    marginBottom: 14,
+  },
+  quickAccessTitle: {
+    margin: "0 0 10px",
+    color: "#7f1d1d",
+    fontSize: 12,
+    fontWeight: 950,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+  },
+  quickAccessButtons: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  quickAccessButton: {
+    border: "1px solid #fecaca",
+    borderRadius: 12,
+    padding: "9px 12px",
+    background: "#ffffff",
+    color: "#7f1d1d",
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+  disabledButton: {
+    opacity: 0.5,
+    cursor: "not-allowed",
+  },
+  quickProductGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(145px, 1fr))",
+    gap: 10,
+    maxHeight: 430,
+    overflowY: "auto",
+    paddingRight: 4,
+  },
+  quickProductCard: {
+    position: "relative",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: 5,
+    minHeight: 130,
+    padding: 14,
+    border: "1px solid #fecaca",
+    borderRadius: 17,
+    background: "linear-gradient(135deg, #ffffff 0%, #fff7f7 100%)",
+    color: "#0f172a",
+    textAlign: "left",
+    cursor: "pointer",
+    boxShadow: "0 8px 20px rgba(127, 29, 29, 0.07)",
+  },
+  quickProductCardDisabled: {
+    opacity: 0.6,
+    cursor: "not-allowed",
+    filter: "grayscale(0.25)",
+  },
+  quickProductName: {
+    fontSize: 14,
+    fontWeight: 950,
+    lineHeight: 1.25,
+  },
+  quickProductCategory: {
+    color: "#64748b",
+    fontSize: 11,
+    lineHeight: 1.3,
+  },
+  quickProductPrice: {
+    marginTop: "auto",
+    color: "#7f1d1d",
+    fontSize: 16,
+    fontWeight: 950,
+  },
+  quickProductStock: {
+    color: "#166534",
+    fontSize: 11,
+    fontWeight: 800,
+  },
+  quickProductStockEmpty: {
+    color: "#991b1b",
+  },
+  quickProductCartCount: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    borderRadius: 999,
+    padding: "4px 7px",
+    background: "#991b1b",
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: 950,
+  },
+  manualLoadToggle: {
+    marginTop: 16,
+  },
+  manualLoadBox: {
+    marginTop: 12,
+    padding: 14,
+    borderRadius: 17,
+    background: "#fff7f7",
+    border: "1px solid #fecaca",
+  },
+  qtyStepper: {
+    display: "grid",
+    gridTemplateColumns: "36px 1fr 36px",
+    alignItems: "center",
+    border: "1px solid #fecaca",
+    borderRadius: 13,
+    overflow: "hidden",
+    background: "#ffffff",
+  },
+  qtyStepperButton: {
+    border: "none",
+    background: "#fee2e2",
+    color: "#7f1d1d",
+    height: 36,
+    fontSize: 20,
+    fontWeight: 950,
+    cursor: "pointer",
+  },
+  qtyStepperValue: {
+    textAlign: "center",
+    color: "#0f172a",
+    fontSize: 14,
   },
   clientCard: {
     background: "rgba(255,255,255,0.86)",

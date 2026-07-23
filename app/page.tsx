@@ -926,7 +926,8 @@ export default function Home() {
 
   if (cargandoUsuario) {
     return (
-      <main style={styles.main}>
+      <main className="app-main" style={styles.main}>
+        <ResponsiveStyles />
         <div style={{ padding: 40 }}>
           <p>Cargando sistema...</p>
         </div>
@@ -936,8 +937,9 @@ export default function Home() {
 
   if (!usuario) {
     return (
-      <main style={styles.loginMain}>
-        <section style={styles.loginBox}>
+      <main className="app-login-main" style={styles.loginMain}>
+        <ResponsiveStyles />
+        <section className="app-login-box" style={styles.loginBox}>
           <h1 style={styles.loginTitle}>Sistema de Gestión para Comercios</h1>
 
           {!modoRegistro ? (
@@ -1047,8 +1049,9 @@ export default function Home() {
   }
 
   return (
-    <main style={styles.main}>
-      <div style={styles.layout}>
+    <main className="app-main" style={styles.main}>
+        <ResponsiveStyles />
+      <div className="app-layout" style={styles.layout}>
         <Sidebar
           seccion={seccion}
           setSeccion={setSeccion}
@@ -1058,7 +1061,7 @@ export default function Home() {
           cerrarSesion={cerrarSesion}
         />
 
-        <section style={styles.content}>
+        <section className="app-content" style={styles.content}>
           {cargandoDatos && (
             <Panel title="Cargando datos">
               <Empty text="Leyendo información desde Supabase..." />
@@ -1249,7 +1252,7 @@ function MiComercio({
       />
 
       <Panel title="Datos del comercio">
-        <div style={styles.formGridSmall}>
+        <div className="app-form-grid-small" style={styles.formGridSmall}>
           <Input
             placeholder="Nombre del comercio"
             value={nombre}
@@ -1303,6 +1306,7 @@ function Sidebar({
   rolUsuario: string;
   cerrarSesion: () => void;
 }) {
+  const [menuAbierto, setMenuAbierto] = useState(false);
   const grupos: {
     titulo: string;
     items: { id: Seccion; label: string; icono: string }[];
@@ -1338,54 +1342,82 @@ function Sidebar({
     rolUsuario === "admin_secretaria" ? "Secretaría" : "Comercio";
 
   return (
-    <aside style={styles.sidebar}>
+    <aside className="app-sidebar" style={styles.sidebar}>
       <div style={styles.sidebarGlow} />
 
-      <div style={styles.sidebarHeaderBox}>
+      <div className="app-sidebar-header" style={styles.sidebarHeaderBox}>
         <p style={styles.logoKicker}>Sistema de Gestión</p>
         <h1 style={styles.logo}>{comercioActual?.nombre || "Mi Comercio"}</h1>
         <div style={styles.rolePill}>{etiquetaRol}</div>
       </div>
 
-      <p style={styles.sidebarEmail}>{emailUsuario}</p>
-
-      <nav style={{ marginTop: 26 }}>
-        {grupos.map((grupo) => (
-          <div key={grupo.titulo} style={{ marginBottom: 18 }}>
-            <p style={styles.navGroupTitle}>{grupo.titulo}</p>
-            {grupo.items.map((item) => {
-              const activo = seccion === item.id;
-
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setSeccion(item.id)}
-                  style={{
-                    ...styles.navItem,
-                    background: activo
-                      ? "linear-gradient(135deg, rgba(220,38,38,0.98), rgba(127,29,29,0.94))"
-                      : "rgba(15, 23, 42, 0.24)",
-                    color: activo ? "white" : "#cbd5e1",
-                    borderColor: activo
-                      ? "rgba(248, 113, 113, 0.75)"
-                      : "rgba(148, 163, 184, 0.12)",
-                    boxShadow: activo
-                      ? "0 12px 24px rgba(127, 29, 29, 0.35)"
-                      : "none",
-                  }}
-                >
-                  <span style={styles.navIcon}>{item.icono}</span>
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        ))}
-      </nav>
-
-      <button onClick={cerrarSesion} style={styles.logoutButton}>
-        Cerrar sesión
+      <button
+        type="button"
+        className="app-mobile-menu-button"
+        onClick={() => setMenuAbierto((valor) => !valor)}
+        aria-expanded={menuAbierto}
+        aria-controls="menu-principal-comercio"
+      >
+        <span aria-hidden="true">☰</span>
+        <span>{menuAbierto ? "Cerrar menú" : "Abrir menú"}</span>
       </button>
+
+      <div
+        id="menu-principal-comercio"
+        className={`app-sidebar-body ${menuAbierto ? "open" : ""}`}
+      >
+        <p className="app-sidebar-email" style={styles.sidebarEmail}>
+          {emailUsuario}
+        </p>
+
+        <nav className="app-sidebar-nav" style={{ marginTop: 26 }}>
+          {grupos.map((grupo) => (
+            <div
+              key={grupo.titulo}
+              className="app-nav-group"
+              style={{ marginBottom: 18 }}
+            >
+              <p className="app-nav-group-title" style={styles.navGroupTitle}>
+                {grupo.titulo}
+              </p>
+              {grupo.items.map((item) => {
+                const activo = seccion === item.id;
+
+                return (
+                  <button
+                    key={item.id}
+                    className="app-nav-item"
+                    onClick={() => {
+                      setSeccion(item.id);
+                      setMenuAbierto(false);
+                    }}
+                    style={{
+                      ...styles.navItem,
+                      background: activo
+                        ? "linear-gradient(135deg, rgba(220,38,38,0.98), rgba(127,29,29,0.94))"
+                        : "rgba(15, 23, 42, 0.24)",
+                      color: activo ? "white" : "#cbd5e1",
+                      borderColor: activo
+                        ? "rgba(248, 113, 113, 0.75)"
+                        : "rgba(148, 163, 184, 0.12)",
+                      boxShadow: activo
+                        ? "0 12px 24px rgba(127, 29, 29, 0.35)"
+                        : "none",
+                    }}
+                  >
+                    <span style={styles.navIcon}>{item.icono}</span>
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
+
+        <button onClick={cerrarSesion} style={styles.logoutButton}>
+          Cerrar sesión
+        </button>
+      </div>
     </aside>
   );
 }
@@ -1444,8 +1476,8 @@ function Inicio({
       />
 
       {mostrarCentroAlertas && mostrarAlertas && (
-        <div style={styles.alertsPanel}>
-          <div style={styles.alertsHeader}>
+        <div className="app-alerts-panel" style={styles.alertsPanel}>
+          <div className="app-alerts-header" style={styles.alertsHeader}>
             <div>
               <h3 style={styles.alertsTitle}>Alertas y novedades</h3>
               <p style={styles.alertsSubtitle}>
@@ -1496,6 +1528,7 @@ function Inicio({
                 return (
                   <div
                     key={alerta.id}
+                    className="app-alert-item"
                     style={{
                       ...styles.alertItem,
                       background: apariencia.fondo,
@@ -1539,14 +1572,14 @@ function Inicio({
         </div>
       )}
 
-      <div style={styles.cardsGrid}>
+      <div className="app-cards-grid" style={styles.cardsGrid}>
         <Card title="Ventas totales" value={money(ventasDelDia)} />
         <Card title="Caja abierta" value={caja.abierta ? "Sí" : "No"} />
         <Card title="Saldo actual caja" value={money(saldoCajaEstimado)} />
         <Card title="Stock bajo" value={String(productosStockBajo.length)} />
       </div>
 
-      <div style={styles.cardsGrid}>
+      <div className="app-cards-grid" style={styles.cardsGrid}>
         <Card title="Productos" value={String(productos.length)} />
         <Card
           title="Ventas caja actual"
@@ -1564,7 +1597,7 @@ function Inicio({
         />
       </div>
 
-      <div style={styles.twoColumns}>
+      <div className="app-two-columns" style={styles.twoColumns}>
         <Panel title="Últimas ventas">
           {ventas.length === 0 ? (
             <Empty text="Todavía no hay ventas registradas." />
@@ -1877,7 +1910,7 @@ function Productos({
 
       {mostrarFormulario && (
         <Panel title={productoEditando ? "Editar producto" : "Nuevo producto"}>
-          <div style={styles.formGrid}>
+          <div className="app-form-grid" style={styles.formGrid}>
             <Input
               placeholder="Nombre"
               value={form.nombre}
@@ -1925,7 +1958,7 @@ function Productos({
             />
           </div>
 
-          <div style={styles.actions}>
+          <div className="app-actions" style={styles.actions}>
             {productoEditando ? (
               <Button onClick={guardarCambiosProducto}>Guardar cambios</Button>
             ) : (
@@ -2013,7 +2046,7 @@ function Productos({
           <Empty text="Todavía no hay ingresos de mercadería registrados." />
         ) : (
           ingresosStock.map((ingreso) => (
-            <div key={ingreso.id} style={styles.stockHistoryItem}>
+            <div key={ingreso.id} className="app-stock-history-item" style={styles.stockHistoryItem}>
               <div>
                 <strong style={styles.stockHistoryTitle}>
                   {ingreso.productoNombre}
@@ -2036,8 +2069,8 @@ function Productos({
       </Panel>
 
       {productoParaStock && (
-        <div style={styles.modalBackdrop}>
-          <div style={styles.modalBox}>
+        <div className="app-modal-backdrop" style={styles.modalBackdrop}>
+          <div className="app-modal-box" style={styles.modalBox}>
             <h3 style={styles.panelTitle}>Agregar stock</h3>
             <p style={styles.text}>
               Producto: <strong>{productoParaStock.nombre}</strong>
@@ -2070,7 +2103,7 @@ function Productos({
               </p>
             )}
 
-            <div style={styles.actions}>
+            <div className="app-actions" style={styles.actions}>
               <Button onClick={confirmarIngresoStock}>
                 {guardandoIngresoStock ? "Guardando..." : "Confirmar ingreso"}
               </Button>
@@ -2227,7 +2260,7 @@ function Clientes({
       />
 
       <Panel title={clienteEditando ? "Editar cliente" : "Nuevo cliente"}>
-        <div style={styles.formGridSmall}>
+        <div className="app-form-grid-small" style={styles.formGridSmall}>
           <Input placeholder="Nombre" value={nombre} onChange={setNombre} />
           <Input
             placeholder="Teléfono"
@@ -2242,7 +2275,7 @@ function Clientes({
         </div>
 
         {clienteEditando && (
-          <div style={styles.actions}>
+          <div className="app-actions" style={styles.actions}>
             <SecondaryButton onClick={limpiarFormulario}>
               Cancelar edición
             </SecondaryButton>
@@ -2260,7 +2293,7 @@ function Clientes({
 
             return (
               <div key={cliente.id} style={styles.clientCard}>
-                <div style={styles.clientHeader}>
+                <div className="app-client-header" style={styles.clientHeader}>
                   <div>
                     <h4 style={styles.clientName}>{cliente.nombre}</h4>
                     <p style={styles.clientMeta}>
@@ -2287,7 +2320,7 @@ function Clientes({
                   </div>
                 </div>
 
-                <div style={styles.clientStatsGrid}>
+                <div className="app-client-stats-grid" style={styles.clientStatsGrid}>
                   <Card
                     title="Compras"
                     value={String(stats.historial.length)}
@@ -2515,7 +2548,7 @@ function Caja({
         subtitle="Apertura, saldo actual, movimientos, cierre e historial."
       />
 
-      <div style={styles.cardsGrid}>
+      <div className="app-cards-grid" style={styles.cardsGrid}>
         <Card title="Estado" value={caja.abierta ? "Abierta" : "Cerrada"} />
         <Card
           title="Caja actual"
@@ -2525,7 +2558,7 @@ function Caja({
         <Card title="Saldo actual estimado" value={money(saldoCajaEstimado)} />
       </div>
 
-      <div style={styles.cardsGrid}>
+      <div className="app-cards-grid" style={styles.cardsGrid}>
         <Card title="Ingresos" value={money(ingresosCaja)} />
         <Card title="Egresos" value={money(egresosCaja)} />
         <Card
@@ -2540,7 +2573,7 @@ function Caja({
         />
       </div>
 
-      <div style={styles.twoColumns}>
+      <div className="app-two-columns" style={styles.twoColumns}>
         <Panel title="Abrir caja">
           <Input
             placeholder="Saldo inicial"
@@ -2549,7 +2582,7 @@ function Caja({
             onChange={setSaldoInicial}
           />
 
-          <div style={styles.actions}>
+          <div className="app-actions" style={styles.actions}>
             <Button onClick={abrirCaja}>Abrir caja</Button>
           </div>
         </Panel>
@@ -2562,7 +2595,7 @@ function Caja({
             onChange={setSaldoFinalReal}
           />
 
-          <div style={styles.actions}>
+          <div className="app-actions" style={styles.actions}>
             <Button onClick={cerrarCaja}>Cerrar caja</Button>
           </div>
 
@@ -2575,7 +2608,7 @@ function Caja({
       </div>
 
       <Panel title="Movimiento manual de caja">
-        <div style={styles.formGridSmall}>
+        <div className="app-form-grid-small" style={styles.formGridSmall}>
           <select
             value={tipo}
             onChange={(e) => setTipo(e.target.value as "Ingreso" | "Egreso")}
@@ -2623,7 +2656,7 @@ function Caja({
           <Empty text="Todavía no hay cajas cerradas." />
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={styles.table}>
+            <table className="app-table" style={styles.table}>
               <thead style={styles.thead}>
                 <tr>
                   <Th>Apertura</Th>
@@ -3121,7 +3154,7 @@ function Ventas({
         subtitle="Venta rápida, carrito y descuento automático de stock."
       />
 
-      <div style={styles.twoColumns}>
+      <div className="app-two-columns" style={styles.twoColumns}>
         <Panel title="Nueva venta">
           {!caja.abierta && (
             <p style={{ ...styles.text, color: "#991b1b", fontWeight: "bold" }}>
@@ -3135,7 +3168,7 @@ function Ventas({
             </p>
           )}
 
-          <div style={styles.quickSaleHeader}>
+          <div className="app-quick-sale-header" style={styles.quickSaleHeader}>
             <div>
               <h3 style={styles.quickSaleTitle}>Venta rápida</h3>
               <p style={styles.quickSaleHelp}>
@@ -3150,7 +3183,7 @@ function Ventas({
             onChange={(event) => setBusquedaRapida(event.target.value)}
             onKeyDown={manejarBusquedaRapida}
             placeholder="Buscar por nombre o categoría..."
-            style={styles.quickSearchInput}
+            className="app-quick-search" style={styles.quickSearchInput}
             autoComplete="off"
           />
 
@@ -3203,7 +3236,7 @@ function Ventas({
           {productosFiltrados.length === 0 ? (
             <Empty text="No hay productos que coincidan con la búsqueda." />
           ) : (
-            <div style={styles.quickProductGrid}>
+            <div className="app-quick-product-grid" style={styles.quickProductGrid}>
               {productosFiltrados.map((producto) => {
                 const sinStock = producto.stock <= 0;
                 const unidadesEnCarrito = cantidadEnCarrito(producto.id);
@@ -3212,6 +3245,7 @@ function Ventas({
                   <button
                     key={producto.id}
                     type="button"
+                    className="app-quick-product-card"
                     onClick={() => agregarProductoRapido(producto)}
                     disabled={sinStock}
                     style={{
@@ -3258,7 +3292,7 @@ function Ventas({
           {mostrarCargaManual && (
             <div style={styles.manualLoadBox}>
               <p style={styles.quickAccessTitle}>Carga por cantidad</p>
-              <div style={styles.formGridSmall}>
+              <div className="app-form-grid-small" style={styles.formGridSmall}>
                 <select
                   value={productoId}
                   onChange={(e) => setProductoId(e.target.value)}
@@ -3310,7 +3344,7 @@ function Ventas({
             </select>
           </div>
 
-          <div style={styles.actions}>
+          <div className="app-actions" style={styles.actions}>
             <Button onClick={confirmarVenta}>Confirmar venta</Button>
           </div>
         </Panel>
@@ -3321,7 +3355,7 @@ function Ventas({
           ) : (
             <>
               {carrito.map((item, index) => (
-                <div key={item.productoId} style={styles.cartItem}>
+                <div key={item.productoId} className="app-cart-item" style={styles.cartItem}>
                   <div>
                     <strong>{item.nombre}</strong>
                     <p style={styles.cartMeta}>
@@ -3329,7 +3363,7 @@ function Ventas({
                     </p>
                   </div>
 
-                  <div style={styles.qtyStepper}>
+                  <div className="app-qty-stepper" style={styles.qtyStepper}>
                     <button
                       type="button"
                       style={styles.qtyStepperButton}
@@ -3371,7 +3405,7 @@ function Ventas({
               ))}
               <hr style={styles.hr} />
               <Row left="Total" right={money(total)} bold />
-              <div style={styles.actions}>
+              <div className="app-actions" style={styles.actions}>
                 <SecondaryButton onClick={vaciarCarrito}>
                   Vaciar carrito
                 </SecondaryButton>
@@ -3398,7 +3432,7 @@ function Ventas({
 
               return (
                 <div key={venta.id} style={styles.saleCard}>
-                  <div style={styles.saleHeader}>
+                  <div className="app-sale-header" style={styles.saleHeader}>
                     <div>
                       <div style={styles.saleTitleRow}>
                         <strong>Venta #{venta.id}</strong>
@@ -3442,7 +3476,7 @@ function Ventas({
                   )}
 
                   {puedeAnularEstaVenta && (
-                    <div style={styles.actions}>
+                    <div className="app-actions" style={styles.actions}>
                       <button
                         style={styles.smallButtonDanger}
                         onClick={() => iniciarAnulacion(venta)}
@@ -3458,8 +3492,8 @@ function Ventas({
       </Panel>
 
       {ventaAnulando && (
-        <div style={styles.modalBackdrop}>
-          <div style={styles.modalBox}>
+        <div className="app-modal-backdrop" style={styles.modalBackdrop}>
+          <div className="app-modal-box" style={styles.modalBox}>
             <h3 style={styles.panelTitle}>Anular venta #{ventaAnulando.id}</h3>
             <p style={styles.text}>
               Esta operación devolverá el stock y registrará un egreso
@@ -3470,12 +3504,12 @@ function Ventas({
               value={motivoAnulacion}
               onChange={(e) => setMotivoAnulacion(e.target.value)}
               placeholder="Motivo obligatorio"
-              style={styles.textarea}
+              className="app-textarea" style={styles.textarea}
               rows={4}
               maxLength={300}
             />
 
-            <div style={styles.actions}>
+            <div className="app-actions" style={styles.actions}>
               <Button onClick={confirmarAnulacion}>
                 {anulandoVenta ? "Anulando..." : "Confirmar anulación"}
               </Button>
@@ -3576,7 +3610,7 @@ function Gastos({
         subtitle="Carga de gastos para mejorar reportes financieros y flujo de caja."
       />
 
-      <div style={styles.cardsGrid}>
+      <div className="app-cards-grid" style={styles.cardsGrid}>
         <Card title="Gastos cargados" value={String(gastos.length)} />
         <Card title="Total de gastos" value={money(totalGastos)} />
         <Card
@@ -3590,7 +3624,7 @@ function Gastos({
       </div>
 
       <Panel title="Nuevo gasto">
-        <div style={styles.formGrid}>
+        <div className="app-form-grid" style={styles.formGrid}>
           <Input
             placeholder="Categoría"
             value={form.categoria}
@@ -3630,7 +3664,7 @@ function Gastos({
           />
         </div>
 
-        <div style={styles.actions}>
+        <div className="app-actions" style={styles.actions}>
           <Button onClick={agregarGasto}>Guardar gasto</Button>
         </div>
       </Panel>
@@ -3870,7 +3904,7 @@ function Capacitaciones({
         }
       />
 
-      <div style={styles.cardsGrid}>
+      <div className="app-cards-grid" style={styles.cardsGrid}>
         <Card title="Capacitaciones" value={String(capacitaciones.length)} />
         <Card title="Activas" value={String(capacitacionesActivas.length)} />
         <Card title="Inscripciones" value={String(inscripciones.length)} />
@@ -3879,7 +3913,7 @@ function Capacitaciones({
 
       {esSecretaria && (
         <Panel title="Nueva capacitación">
-          <div style={styles.formGrid}>
+          <div className="app-form-grid" style={styles.formGrid}>
             <Input
               placeholder="Título"
               value={form.titulo}
@@ -3943,7 +3977,7 @@ function Capacitaciones({
             </select>
           </div>
 
-          <div style={styles.actions}>
+          <div className="app-actions" style={styles.actions}>
             <Button onClick={crearCapacitacion}>Publicar capacitación</Button>
           </div>
         </Panel>
@@ -3963,7 +3997,7 @@ function Capacitaciones({
 
             return (
               <div key={capacitacion.id} style={styles.capacitacionCard}>
-                <div style={styles.capacitacionHeader}>
+                <div className="app-capacitacion-header" style={styles.capacitacionHeader}>
                   <div>
                     <h3 style={styles.capacitacionTitle}>
                       {capacitacion.titulo}
@@ -3977,7 +4011,7 @@ function Capacitaciones({
                   </Badge>
                 </div>
 
-                <div style={styles.capacitacionMetaGrid}>
+                <div className="app-capacitacion-meta-grid" style={styles.capacitacionMetaGrid}>
                   <span>
                     Modalidad:{" "}
                     <strong>{capacitacion.modalidad || "Sin dato"}</strong>
@@ -4010,7 +4044,7 @@ function Capacitaciones({
                 )}
 
                 {!esSecretaria && capacitacion.estado !== "finalizada" && (
-                  <div style={styles.actions}>
+                  <div className="app-actions" style={styles.actions}>
                     {yaInscripto ? (
                       <Badge>Ya inscripto</Badge>
                     ) : (
@@ -4031,7 +4065,7 @@ function Capacitaciones({
 
                 {inscripcionActiva === capacitacion.id && !yaInscripto && (
                   <div style={styles.inscriptionBox}>
-                    <div style={styles.formGridSmall}>
+                    <div className="app-form-grid-small" style={styles.formGridSmall}>
                       <Input
                         placeholder="Nombre de la persona"
                         value={formInscripcion.nombre}
@@ -4060,7 +4094,7 @@ function Capacitaciones({
                         }
                       />
                     </div>
-                    <div style={styles.actions}>
+                    <div className="app-actions" style={styles.actions}>
                       <Button onClick={() => inscribirse(capacitacion)}>
                         Confirmar inscripción
                       </Button>
@@ -4074,7 +4108,7 @@ function Capacitaciones({
                 )}
 
                 {esSecretaria && (
-                  <div style={styles.actions}>
+                  <div className="app-actions" style={styles.actions}>
                     <SecondaryButton
                       onClick={() =>
                         cambiarEstadoCapacitacion(
@@ -4313,21 +4347,21 @@ function Reportes({
         subtitle="Ventas, stock, margen, gastos y flujo de caja."
       />
 
-      <div style={styles.cardsGrid}>
+      <div className="app-cards-grid" style={styles.cardsGrid}>
         <Card title="Ventas totales" value={money(ventasDelDia)} />
         <Card title="Ticket promedio" value={money(ticketPromedio)} />
         <Card title="Margen bruto" value={money(margenBruto)} />
         <Card title="Resultado estimado" value={money(resultadoEstimado)} />
       </div>
 
-      <div style={styles.cardsGrid}>
+      <div className="app-cards-grid" style={styles.cardsGrid}>
         <Card title="Ventas últimos 7 días" value={money(totalUltimos7Dias)} />
         <Card title="Promedio diario" value={money(promedioDiario)} />
         <Card title="Gastos cargados" value={money(totalGastos)} />
         <Card title="Mejor día" value={mejorDia.fecha} />
       </div>
 
-      <div style={styles.cardsGrid}>
+      <div className="app-cards-grid" style={styles.cardsGrid}>
         <Card
           title="Clientes con compras"
           value={String(clientesRanking.length)}
@@ -4340,7 +4374,7 @@ function Reportes({
         <Card title="Clientes registrados" value={String(clientes.length)} />
       </div>
 
-      <div style={styles.twoColumns}>
+      <div className="app-two-columns" style={styles.twoColumns}>
         <Panel title="Ventas diarias">
           {ventasPorDia.length === 0 ? (
             <Empty text="Todavía no hay ventas para graficar." />
@@ -4382,7 +4416,7 @@ function Reportes({
         </Panel>
       </div>
 
-      <div style={styles.twoColumns}>
+      <div className="app-two-columns" style={styles.twoColumns}>
         <Panel title="Clientes que más gastan">
           {clientesRanking.length === 0 ? (
             <Empty text="Todavía no hay clientes con compras." />
@@ -4423,7 +4457,7 @@ function Reportes({
         </Panel>
       </div>
 
-      <div style={styles.twoColumns}>
+      <div className="app-two-columns" style={styles.twoColumns}>
         <Panel title="Días con más ventas">
           {ventasPorDiaSemana.length === 0 ? (
             <Empty text="Todavía no hay ventas registradas." />
@@ -4467,7 +4501,7 @@ function Reportes({
         </Panel>
       </div>
 
-      <div style={styles.twoColumns}>
+      <div className="app-two-columns" style={styles.twoColumns}>
         <Panel title="Productos más vendidos">
           {productosVendidos.length === 0 ? (
             <Empty text="Todavía no hay productos vendidos." />
@@ -4501,7 +4535,7 @@ function Reportes({
         </Panel>
       </div>
 
-      <div style={styles.twoColumns}>
+      <div className="app-two-columns" style={styles.twoColumns}>
         <Panel title="Productos y stock">
           <Row
             left="Stock disponible total"
@@ -4536,7 +4570,7 @@ function Reportes({
         </Panel>
       </div>
 
-      <div style={styles.twoColumns}>
+      <div className="app-two-columns" style={styles.twoColumns}>
         <Panel title="Productos con stock bajo">
           {productosStockBajo.length === 0 ? (
             <Empty text="No hay productos con stock bajo." />
@@ -4573,12 +4607,12 @@ function Header({
   action?: React.ReactNode;
 }) {
   return (
-    <header style={styles.header}>
+    <header className="app-header" style={styles.header}>
       <div>
-        <h2 style={styles.title}>{title}</h2>
+        <h2 className="app-title" style={styles.title}>{title}</h2>
         <p style={styles.subtitle}>{subtitle}</p>
       </div>
-      {action}
+      {action ? <div className="app-header-action">{action}</div> : null}
     </header>
   );
 }
@@ -4600,7 +4634,7 @@ function Panel({
   children: React.ReactNode;
 }) {
   return (
-    <div style={styles.panel}>
+    <div className="app-panel" style={styles.panel}>
       <h3 style={styles.panelTitle}>{title}</h3>
       <div style={{ marginTop: 14 }}>{children}</div>
     </div>
@@ -4609,8 +4643,8 @@ function Panel({
 
 function Table({ children }: { children: React.ReactNode }) {
   return (
-    <div style={styles.tableWrapper}>
-      <table style={styles.table}>{children}</table>
+    <div className="app-table-wrapper" style={styles.tableWrapper}>
+      <table className="app-table" style={styles.table}>{children}</table>
     </div>
   );
 }
@@ -4640,7 +4674,7 @@ function Input({
       placeholder={placeholder}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      style={styles.input}
+      className="app-input" style={styles.input}
     />
   );
 }
@@ -4653,7 +4687,7 @@ function Button({
   onClick: () => void;
 }) {
   return (
-    <button onClick={onClick} style={styles.button}>
+    <button className="app-primary-button" onClick={onClick} style={styles.button}>
       {children}
     </button>
   );
@@ -4667,7 +4701,7 @@ function SecondaryButton({
   onClick: () => void;
 }) {
   return (
-    <button onClick={onClick} style={styles.secondaryButton}>
+    <button className="app-secondary-button" onClick={onClick} style={styles.secondaryButton}>
       {children}
     </button>
   );
@@ -4703,7 +4737,7 @@ function Row({
   bold?: boolean;
 }) {
   return (
-    <div style={styles.row}>
+    <div className="app-row" style={styles.row}>
       <span style={{ fontWeight: bold ? "bold" : "normal" }}>{left}</span>
       <span style={{ fontWeight: "bold" }}>{right}</span>
     </div>
@@ -4734,6 +4768,341 @@ function ChartRow({
 
 function Empty({ text }: { text: string }) {
   return <p style={styles.empty}>{text}</p>;
+}
+
+
+function ResponsiveStyles() {
+  return (
+    <style
+      dangerouslySetInnerHTML={{
+        __html: `
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      .app-mobile-menu-button {
+        display: none;
+      }
+
+      .app-sidebar-body {
+        display: block;
+      }
+
+      .app-table-wrapper {
+        -webkit-overflow-scrolling: touch;
+      }
+
+      @media (max-width: 1100px) {
+        .app-content {
+          padding: 26px !important;
+        }
+
+        .app-cards-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+
+        .app-form-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+
+        .app-capacitacion-meta-grid,
+        .app-client-stats-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .app-layout {
+          display: block !important;
+          min-height: 100vh !important;
+        }
+
+        .app-sidebar {
+          width: 100% !important;
+          padding: 12px !important;
+          position: sticky !important;
+          top: 0 !important;
+          z-index: 100 !important;
+          overflow: visible !important;
+          border-right: none !important;
+          border-bottom: 1px solid rgba(248, 113, 113, 0.28) !important;
+          box-shadow: 0 10px 28px rgba(15, 23, 42, 0.28) !important;
+        }
+
+        .app-sidebar-header {
+          padding: 12px 14px !important;
+          border-radius: 17px !important;
+        }
+
+        .app-sidebar-header h1 {
+          font-size: 19px !important;
+          margin-top: 5px !important;
+        }
+
+        .app-sidebar-header p {
+          font-size: 9px !important;
+        }
+
+        .app-sidebar-header > div {
+          margin-top: 7px !important;
+          padding: 4px 8px !important;
+          font-size: 10px !important;
+        }
+
+        .app-mobile-menu-button {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          margin-top: 8px;
+          min-height: 44px;
+          border: 1px solid rgba(248, 113, 113, 0.36);
+          border-radius: 14px;
+          background: rgba(127, 29, 29, 0.65);
+          color: white;
+          font-weight: 900;
+          cursor: pointer;
+        }
+
+        .app-sidebar-body {
+          display: none;
+        }
+
+        .app-sidebar-body.open {
+          display: block;
+          max-height: calc(100vh - 155px);
+          overflow-y: auto;
+          padding: 4px 2px 8px;
+          scrollbar-width: thin;
+        }
+
+        .app-sidebar-email {
+          margin: 9px 4px !important;
+          font-size: 11px !important;
+        }
+
+        .app-sidebar-nav {
+          margin-top: 10px !important;
+        }
+
+        .app-nav-group {
+          margin-bottom: 8px !important;
+        }
+
+        .app-nav-group-title {
+          display: none !important;
+        }
+
+        .app-nav-item {
+          min-height: 44px;
+          padding: 11px 12px !important;
+          margin-bottom: 6px !important;
+          font-size: 14px !important;
+        }
+
+        .app-content {
+          width: 100% !important;
+          min-width: 0 !important;
+          padding: 18px 12px 30px !important;
+          overflow: visible !important;
+        }
+
+        .app-header {
+          flex-direction: column !important;
+          align-items: stretch !important;
+          gap: 12px !important;
+          margin-bottom: 20px !important;
+        }
+
+        .app-title {
+          font-size: 29px !important;
+          line-height: 1.08 !important;
+          overflow-wrap: anywhere;
+        }
+
+        .app-header-action,
+        .app-header-action > * {
+          width: 100%;
+        }
+
+        .app-header-action > button {
+          justify-content: center !important;
+        }
+
+        .app-cards-grid,
+        .app-two-columns,
+        .app-form-grid,
+        .app-form-grid-small,
+        .app-capacitacion-meta-grid,
+        .app-client-stats-grid {
+          grid-template-columns: minmax(0, 1fr) !important;
+          gap: 12px !important;
+        }
+
+        .app-panel,
+        .app-alerts-panel {
+          padding: 17px !important;
+          border-radius: 20px !important;
+          margin-bottom: 16px !important;
+        }
+
+        .app-alerts-header,
+        .app-capacitacion-header,
+        .app-client-header,
+        .app-sale-header,
+        .app-stock-history-item,
+        .app-quick-sale-header {
+          flex-direction: column !important;
+          align-items: stretch !important;
+          gap: 10px !important;
+        }
+
+        .app-alert-item {
+          display: grid !important;
+          grid-template-columns: 34px minmax(0, 1fr) !important;
+          align-items: start !important;
+          gap: 10px !important;
+          padding: 13px !important;
+        }
+
+        .app-alert-item > button {
+          grid-column: 1 / -1;
+          width: 100%;
+          min-height: 42px;
+        }
+
+        .app-cart-item {
+          grid-template-columns: minmax(0, 1fr) !important;
+          align-items: stretch !important;
+          gap: 10px !important;
+          padding: 14px 0 !important;
+        }
+
+        .app-cart-item > strong,
+        .app-cart-item > button {
+          width: 100%;
+        }
+
+        .app-qty-stepper {
+          width: min(190px, 100%);
+        }
+
+        .app-quick-product-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+          max-height: none !important;
+          overflow: visible !important;
+          padding-right: 0 !important;
+        }
+
+        .app-quick-product-card {
+          min-width: 0;
+          min-height: 118px !important;
+          padding: 12px !important;
+        }
+
+        .app-table-wrapper {
+          width: 100%;
+          max-width: 100%;
+          overflow-x: auto !important;
+          border-radius: 18px !important;
+        }
+
+        .app-table {
+          min-width: 720px;
+        }
+
+        .app-row {
+          align-items: flex-start !important;
+          flex-wrap: wrap !important;
+          gap: 7px !important;
+        }
+
+        .app-row > span:last-child {
+          margin-left: auto;
+          text-align: right;
+        }
+
+        .app-actions {
+          display: grid !important;
+          grid-template-columns: minmax(0, 1fr) !important;
+          gap: 10px !important;
+        }
+
+        .app-actions > button,
+        .app-actions > a {
+          width: 100%;
+          min-height: 44px;
+        }
+
+        .app-login-main {
+          padding: 14px !important;
+        }
+
+        .app-login-box {
+          width: 100% !important;
+          max-width: 470px !important;
+          padding: 24px 18px !important;
+          border-radius: 22px !important;
+        }
+
+        .app-modal-backdrop {
+          padding: 10px !important;
+          align-items: flex-end !important;
+        }
+
+        .app-modal-box {
+          width: 100% !important;
+          max-height: 90vh !important;
+          overflow-y: auto !important;
+          padding: 20px 16px !important;
+          border-radius: 22px 22px 0 0 !important;
+        }
+
+        .app-input,
+        .app-textarea,
+        .app-quick-search,
+        .app-qty-input,
+        input,
+        select,
+        textarea {
+          min-height: 44px;
+          font-size: 16px !important;
+        }
+
+        button {
+          touch-action: manipulation;
+        }
+      }
+
+      @media (max-width: 390px) {
+        .app-content {
+          padding-left: 9px !important;
+          padding-right: 9px !important;
+        }
+
+        .app-quick-product-grid {
+          grid-template-columns: minmax(0, 1fr) !important;
+        }
+
+        .app-title {
+          font-size: 26px !important;
+        }
+      }
+        `,
+      }}
+    />
+  );
 }
 
 function parseFechaAR(fecha: string) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 type Seccion =
@@ -1710,6 +1710,16 @@ function Productos({
     );
   }
 
+  function codigoProductoYaExiste(codigoBuscado: string, ignorarId?: number) {
+    const codigoNormalizado = codigoBuscado.trim().toLowerCase();
+
+    return productos.some(
+      (producto) =>
+        producto.id !== ignorarId &&
+        producto.codigo.trim().toLowerCase() === codigoNormalizado,
+    );
+  }
+
   async function agregarProducto() {
     if (!comercioActual) {
       alert("No hay comercio asociado.");
@@ -1721,12 +1731,17 @@ function Productos({
       return;
     }
 
+    if (codigoProductoYaExiste(form.codigo)) {
+      alert("Ya existe otro producto con ese código de barras.");
+      return;
+    }
+
     const { data, error } = await supabase
       .from("productos")
       .insert({
         comercio_id: comercioActual.id,
         nombre: form.nombre,
-        codigo: form.codigo,
+        codigo: form.codigo.trim(),
         categoria: form.categoria,
         precio: Number(form.precio),
         costo: Number(form.costo),
@@ -1762,11 +1777,16 @@ function Productos({
       return;
     }
 
+    if (codigoProductoYaExiste(form.codigo, productoEditando.id)) {
+      alert("Ya existe otro producto con ese código de barras.");
+      return;
+    }
+
     const { data, error } = await supabase
       .from("productos")
       .update({
         nombre: form.nombre,
-        codigo: form.codigo,
+        codigo: form.codigo.trim(),
         categoria: form.categoria,
         precio: Number(form.precio),
         costo: Number(form.costo),
@@ -1918,7 +1938,7 @@ function Productos({
             />
 
             <Input
-              placeholder="Código"
+              placeholder="Código de barras o código interno"
               value={form.codigo}
               onChange={(v) => setForm({ ...form, codigo: v })}
             />
@@ -2721,15 +2741,46 @@ function Ventas({
   const [carrito, setCarrito] = useState<ItemVenta[]>([]);
   const [cliente, setCliente] = useState("Consumidor final");
   const [medioPago, setMedioPago] = useState("Efectivo");
+  const [montoRecibido, setMontoRecibido] = useState("");
+  const busquedaRapidaRef = useRef<HTMLInputElement | null>(null);
   const [ventaAnulando, setVentaAnulando] = useState<Venta | null>(null);
   const [motivoAnulacion, setMotivoAnulacion] = useState("");
   const [anulandoVenta, setAnulandoVenta] = useState(false);
   const [busquedaRapida, setBusquedaRapida] = useState("");
   const [categoriaSeleccionada, setCategoriaSeleccionada] = useState("Todos");
   const [mostrarCargaManual, setMostrarCargaManual] = useState(false);
+  const [filtroPeriodoVentas, setFiltroPeriodoVentas] = useState("todas");
+  const [filtroFechaDesde, setFiltroFechaDesde] = useState("");
+  const [filtroFechaHasta, setFiltroFechaHasta] = useState("");
+  const [filtroMedioPago, setFiltroMedioPago] = useState("Todos");
+  const [filtroEstadoVenta, setFiltroEstadoVenta] = useState("Todas");
+  const [filtroClienteVenta, setFiltroClienteVenta] = useState("Todos");
+  const [filtroProductoVenta, setFiltroProductoVenta] = useState("Todos");
+  const [filtroImporteMinimo, setFiltroImporteMinimo] = useState("");
+  const [filtroImporteMaximo, setFiltroImporteMaximo] = useState("");
+  const [filtroNumeroVenta, setFiltroNumeroVenta] = useState("");
+  const [mostrarRegistroRapido, setMostrarRegistroRapido] = useState(false);
+  const [guardandoProductoRapido, setGuardandoProductoRapido] = useState(false);
+  const [nuevoProductoRapido, setNuevoProductoRapido] = useState({
+    nombre: "",
+    codigo: "",
+    categoria: "",
+    precio: "",
+    costo: "",
+    stock: "",
+    minimo: "",
+  });
 
   const total = carrito.reduce((acc, item) => acc + item.subtotal, 0);
+  const montoRecibidoNumero = Number(montoRecibido.replace(",", ".")) || 0;
+  const diferenciaEfectivo = montoRecibidoNumero - total;
   const puedeAnularVentas = rolUsuario === "admin_comercio";
+
+  useEffect(() => {
+    if (medioPago !== "Efectivo") {
+      setMontoRecibido("");
+    }
+  }, [medioPago]);
   const productosActivos = productos.filter((producto) => producto.activo);
   const categorias = [
     "Todos",
@@ -2781,6 +2832,210 @@ function Ventas({
     productosMasVendidos.length > 0
       ? productosMasVendidos
       : productosActivos.filter((producto) => producto.stock > 0).slice(0, 6);
+
+  const clientesEnVentas = Array.from(
+    new Set(ventas.map((venta) => venta.cliente).filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const mediosPagoEnVentas = Array.from(
+    new Set(ventas.map((venta) => venta.medioPago).filter(Boolean)),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const productosEnVentas = Array.from(
+    new Map(
+      ventas.flatMap((venta) =>
+        venta.items.map((item) => [String(item.productoId), item.nombre] as const),
+      ),
+    ).entries(),
+  ).sort((a, b) => a[1].localeCompare(b[1]));
+
+  function fechaSinHora(value: string) {
+    const fecha = new Date(value);
+
+    if (Number.isNaN(fecha.getTime())) return null;
+
+    return new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate());
+  }
+
+  function fechaDesdeInput(value: string) {
+    if (!value) return null;
+
+    const [anio, mes, dia] = value.split("-").map(Number);
+
+    if (!anio || !mes || !dia) return null;
+
+    return new Date(anio, mes - 1, dia);
+  }
+
+  const hoyVentas = new Date();
+  const inicioHoyVentas = new Date(
+    hoyVentas.getFullYear(),
+    hoyVentas.getMonth(),
+    hoyVentas.getDate(),
+  );
+  const inicioUltimosSieteDias = new Date(inicioHoyVentas);
+  inicioUltimosSieteDias.setDate(inicioUltimosSieteDias.getDate() - 6);
+  const inicioMesActual = new Date(
+    hoyVentas.getFullYear(),
+    hoyVentas.getMonth(),
+    1,
+  );
+  const fechaDesdePersonalizada = fechaDesdeInput(filtroFechaDesde);
+  const fechaHastaPersonalizada = fechaDesdeInput(filtroFechaHasta);
+  const importeMinimo = filtroImporteMinimo
+    ? Number(filtroImporteMinimo.replace(",", "."))
+    : null;
+  const importeMaximo = filtroImporteMaximo
+    ? Number(filtroImporteMaximo.replace(",", "."))
+    : null;
+  const numeroVentaBuscado = filtroNumeroVenta.trim();
+
+  const ventasFiltradas = ventas.filter((venta) => {
+    const fechaVenta = fechaSinHora(venta.fecha);
+
+    if (filtroPeriodoVentas === "hoy") {
+      if (!fechaVenta || fechaVenta.getTime() !== inicioHoyVentas.getTime()) {
+        return false;
+      }
+    }
+
+    if (filtroPeriodoVentas === "ultimos7") {
+      if (
+        !fechaVenta ||
+        fechaVenta.getTime() < inicioUltimosSieteDias.getTime() ||
+        fechaVenta.getTime() > inicioHoyVentas.getTime()
+      ) {
+        return false;
+      }
+    }
+
+    if (filtroPeriodoVentas === "mes") {
+      if (!fechaVenta || fechaVenta.getTime() < inicioMesActual.getTime()) {
+        return false;
+      }
+    }
+
+    if (filtroPeriodoVentas === "personalizado") {
+      if (
+        fechaDesdePersonalizada &&
+        (!fechaVenta ||
+          fechaVenta.getTime() < fechaDesdePersonalizada.getTime())
+      ) {
+        return false;
+      }
+
+      if (
+        fechaHastaPersonalizada &&
+        (!fechaVenta ||
+          fechaVenta.getTime() > fechaHastaPersonalizada.getTime())
+      ) {
+        return false;
+      }
+    }
+
+    if (
+      filtroMedioPago !== "Todos" &&
+      venta.medioPago !== filtroMedioPago
+    ) {
+      return false;
+    }
+
+    if (
+      filtroEstadoVenta === "Activas" &&
+      venta.estado === "anulada"
+    ) {
+      return false;
+    }
+
+    if (
+      filtroEstadoVenta === "Anuladas" &&
+      venta.estado !== "anulada"
+    ) {
+      return false;
+    }
+
+    if (
+      filtroClienteVenta !== "Todos" &&
+      venta.cliente !== filtroClienteVenta
+    ) {
+      return false;
+    }
+
+    if (
+      filtroProductoVenta !== "Todos" &&
+      !venta.items.some(
+        (item) => String(item.productoId) === filtroProductoVenta,
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      importeMinimo !== null &&
+      Number.isFinite(importeMinimo) &&
+      venta.total < importeMinimo
+    ) {
+      return false;
+    }
+
+    if (
+      importeMaximo !== null &&
+      Number.isFinite(importeMaximo) &&
+      venta.total > importeMaximo
+    ) {
+      return false;
+    }
+
+    if (
+      numeroVentaBuscado &&
+      !String(venta.id).includes(numeroVentaBuscado)
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const ventasFiltradasOrdenadas = ventasFiltradas
+    .slice()
+    .sort((a, b) => {
+      const fechaA = new Date(a.fecha).getTime();
+      const fechaB = new Date(b.fecha).getTime();
+
+      if (Number.isNaN(fechaA) || Number.isNaN(fechaB)) {
+        return b.id - a.id;
+      }
+
+      return fechaB - fechaA || b.id - a.id;
+    });
+
+  const ventasActivasFiltradas = ventasFiltradas.filter(
+    (venta) => venta.estado !== "anulada",
+  );
+  const totalVentasFiltradas = ventasActivasFiltradas.reduce(
+    (acc, venta) => acc + venta.total,
+    0,
+  );
+  const ticketPromedioFiltrado =
+    ventasActivasFiltradas.length > 0
+      ? totalVentasFiltradas / ventasActivasFiltradas.length
+      : 0;
+  const ventasAnuladasFiltradas = ventasFiltradas.filter(
+    (venta) => venta.estado === "anulada",
+  ).length;
+
+  function limpiarFiltrosVentas() {
+    setFiltroPeriodoVentas("todas");
+    setFiltroFechaDesde("");
+    setFiltroFechaHasta("");
+    setFiltroMedioPago("Todos");
+    setFiltroEstadoVenta("Todas");
+    setFiltroClienteVenta("Todos");
+    setFiltroProductoVenta("Todos");
+    setFiltroImporteMinimo("");
+    setFiltroImporteMaximo("");
+    setFiltroNumeroVenta("");
+  }
 
   function cantidadEnCarrito(productoIdBuscado: number) {
     return carrito
@@ -2910,6 +3165,156 @@ function Ventas({
     }
   }
 
+  function enfocarBusquedaRapida() {
+    requestAnimationFrame(() => {
+      busquedaRapidaRef.current?.focus();
+    });
+  }
+
+  function limpiarBusquedaDespuesDeAgregar() {
+    setBusquedaRapida("");
+    setCategoriaSeleccionada("Todos");
+    enfocarBusquedaRapida();
+  }
+
+  function abrirRegistroRapidoProducto(codigo: string) {
+    setNuevoProductoRapido({
+      nombre: "",
+      codigo: codigo.trim(),
+      categoria: "",
+      precio: "",
+      costo: "",
+      stock: "",
+      minimo: "",
+    });
+    setMostrarRegistroRapido(true);
+  }
+
+  function cancelarRegistroRapidoProducto() {
+    if (guardandoProductoRapido) return;
+
+    setMostrarRegistroRapido(false);
+    setNuevoProductoRapido({
+      nombre: "",
+      codigo: "",
+      categoria: "",
+      precio: "",
+      costo: "",
+      stock: "",
+      minimo: "",
+    });
+    setBusquedaRapida("");
+    enfocarBusquedaRapida();
+  }
+
+  async function registrarProductoDesdeVenta() {
+    if (!comercioActual) {
+      alert("No hay comercio asociado.");
+      return;
+    }
+
+    const nombre = nuevoProductoRapido.nombre.trim();
+    const codigo = nuevoProductoRapido.codigo.trim();
+    const categoria = nuevoProductoRapido.categoria.trim();
+    const precio = Number(nuevoProductoRapido.precio.replace(",", "."));
+    const costo = Number(nuevoProductoRapido.costo.replace(",", "."));
+    const stock = Number(nuevoProductoRapido.stock);
+    const minimo = Number(nuevoProductoRapido.minimo);
+
+    if (
+      !nombre ||
+      !codigo ||
+      !categoria ||
+      nuevoProductoRapido.precio.trim() === "" ||
+      nuevoProductoRapido.costo.trim() === "" ||
+      nuevoProductoRapido.stock.trim() === "" ||
+      nuevoProductoRapido.minimo.trim() === ""
+    ) {
+      alert("Completá todos los datos del producto.");
+      return;
+    }
+
+    if (!Number.isFinite(precio) || precio < 0) {
+      alert("Ingresá un precio válido.");
+      return;
+    }
+
+    if (!Number.isFinite(costo) || costo < 0) {
+      alert("Ingresá un costo válido.");
+      return;
+    }
+
+    if (!Number.isInteger(stock) || stock < 0) {
+      alert("El stock debe ser un número entero igual o mayor a cero.");
+      return;
+    }
+
+    if (!Number.isInteger(minimo) || minimo < 0) {
+      alert("El stock mínimo debe ser un número entero igual o mayor a cero.");
+      return;
+    }
+
+    const codigoRepetido = productos.some(
+      (producto) =>
+        producto.codigo.trim().toLowerCase() === codigo.toLowerCase(),
+    );
+
+    if (codigoRepetido) {
+      alert("Ya existe un producto con ese código de barras.");
+      return;
+    }
+
+    setGuardandoProductoRapido(true);
+
+    const { data, error } = await supabase
+      .from("productos")
+      .insert({
+        comercio_id: comercioActual.id,
+        nombre,
+        codigo,
+        categoria,
+        precio,
+        costo,
+        stock,
+        minimo,
+        activo: true,
+      })
+      .select()
+      .single();
+
+    setGuardandoProductoRapido(false);
+
+    if (error) {
+      alert("Error al registrar el producto: " + error.message);
+      return;
+    }
+
+    const productoCreado = normalizarProducto(data);
+
+    setMostrarRegistroRapido(false);
+    setNuevoProductoRapido({
+      nombre: "",
+      codigo: "",
+      categoria: "",
+      precio: "",
+      costo: "",
+      stock: "",
+      minimo: "",
+    });
+    setBusquedaRapida("");
+    setCategoriaSeleccionada("Todos");
+
+    if (productoCreado.stock > 0) {
+      agregarProductoRapido(productoCreado);
+      alert("Producto registrado y agregado al carrito.");
+    } else {
+      alert("Producto registrado. No se agregó al carrito porque no tiene stock.");
+    }
+
+    await recargarDatos();
+    enfocarBusquedaRapida();
+  }
+
   function manejarBusquedaRapida(
     event: React.KeyboardEvent<HTMLInputElement>,
   ) {
@@ -2917,28 +3322,78 @@ function Ventas({
 
     event.preventDefault();
 
+    const termino = busquedaRapida.trim().toLowerCase();
+
+    if (!termino) {
+      enfocarBusquedaRapida();
+      return;
+    }
+
+    const productoPorCodigo = productosActivos.find(
+      (producto) => producto.codigo.trim().toLowerCase() === termino,
+    );
+
+    if (productoPorCodigo) {
+      const agregado = agregarProductoRapido(productoPorCodigo);
+
+      if (agregado) {
+        limpiarBusquedaDespuesDeAgregar();
+      } else {
+        enfocarBusquedaRapida();
+      }
+
+      return;
+    }
+
     const productoExacto = productosFiltrados.find(
-      (producto) =>
-        producto.nombre.toLowerCase() === terminoBusqueda ||
-        producto.codigo.toLowerCase() === terminoBusqueda,
+      (producto) => producto.nombre.toLowerCase() === termino,
     );
 
     if (productoExacto) {
-      agregarProductoRapido(productoExacto);
+      const agregado = agregarProductoRapido(productoExacto);
+
+      if (agregado) {
+        limpiarBusquedaDespuesDeAgregar();
+      } else {
+        enfocarBusquedaRapida();
+      }
+
       return;
     }
 
     if (productosFiltrados.length === 1) {
-      agregarProductoRapido(productosFiltrados[0]);
+      const agregado = agregarProductoRapido(productosFiltrados[0]);
+
+      if (agregado) {
+        limpiarBusquedaDespuesDeAgregar();
+      } else {
+        enfocarBusquedaRapida();
+      }
+
       return;
     }
 
     if (productosFiltrados.length === 0) {
-      alert("No se encontró ningún producto con esa búsqueda.");
+      const productoInactivo = productos.find(
+        (producto) =>
+          producto.codigo.trim().toLowerCase() === termino && !producto.activo,
+      );
+
+      if (productoInactivo) {
+        alert(
+          `${productoInactivo.nombre} está inactivo. Reactivalo desde Productos para poder venderlo.`,
+        );
+        setBusquedaRapida("");
+        enfocarBusquedaRapida();
+        return;
+      }
+
+      abrirRegistroRapidoProducto(busquedaRapida);
       return;
     }
 
     alert("Hay varios resultados. Tocá el producto que querés agregar.");
+    enfocarBusquedaRapida();
   }
 
   async function confirmarVenta() {
@@ -2955,6 +3410,24 @@ function Ventas({
     if (carrito.length === 0) {
       alert("Agregá al menos un producto.");
       return;
+    }
+
+    if (medioPago === "Efectivo") {
+      const montoEntregado = Number(montoRecibido.replace(",", "."));
+
+      if (!montoRecibido.trim() || !Number.isFinite(montoEntregado)) {
+        alert("Ingresá con cuánto paga el cliente.");
+        return;
+      }
+
+      if (montoEntregado < total) {
+        alert(
+          `El importe entregado no alcanza. Faltan ${money(
+            total - montoEntregado,
+          )}.`,
+        );
+        return;
+      }
     }
 
     const clienteEncontrado = clientes.find((c) => c.nombre === cliente);
@@ -3072,11 +3545,20 @@ function Ventas({
       },
     ]);
 
+    const mensajeFinal =
+      medioPago === "Efectivo"
+        ? `Venta registrada correctamente. Vuelto: ${money(
+            Math.max(0, diferenciaEfectivo),
+          )}.`
+        : "Venta registrada correctamente.";
+
     setCarrito([]);
     setBusquedaRapida("");
+    setMontoRecibido("");
     setCategoriaSeleccionada("Todos");
     await recargarDatos();
-    alert("Venta registrada correctamente.");
+    alert(mensajeFinal);
+    enfocarBusquedaRapida();
   }
 
   function iniciarAnulacion(venta: Venta) {
@@ -3172,18 +3654,21 @@ function Ventas({
             <div>
               <h3 style={styles.quickSaleTitle}>Venta rápida</h3>
               <p style={styles.quickSaleHelp}>
-                Buscá o tocá un producto. Cada toque suma una unidad al carrito.
+                Escaneá el código, buscá por nombre o tocá un producto. Cada lectura suma una unidad al carrito.
               </p>
             </div>
             <Badge>{productosFiltrados.length} productos</Badge>
           </div>
 
           <input
+            ref={busquedaRapidaRef}
+            autoFocus
             value={busquedaRapida}
             onChange={(event) => setBusquedaRapida(event.target.value)}
             onKeyDown={manejarBusquedaRapida}
-            placeholder="Buscar por nombre o categoría..."
-            className="app-quick-search" style={styles.quickSearchInput}
+            placeholder="Escaneá el código o buscá por nombre/categoría..."
+            className="app-quick-search"
+            style={styles.quickSearchInput}
             autoComplete="off"
           />
 
@@ -3342,6 +3827,65 @@ function Ventas({
               <option>Tarjeta</option>
               <option>Mercado Pago</option>
             </select>
+
+            {medioPago === "Efectivo" && (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: 14,
+                  border: "1px solid #dbeafe",
+                  borderRadius: 14,
+                  background: "#f8fafc",
+                }}
+              >
+                <label
+                  htmlFor="monto-recibido"
+                  style={{
+                    display: "block",
+                    marginBottom: 7,
+                    fontWeight: 800,
+                    color: "#0f172a",
+                  }}
+                >
+                  Paga con
+                </label>
+
+                <input
+                  id="monto-recibido"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={montoRecibido}
+                  onChange={(event) => setMontoRecibido(event.target.value)}
+                  placeholder="Importe entregado por el cliente"
+                  style={styles.input}
+                />
+
+                {montoRecibido.trim() !== "" && (
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      marginTop: 12,
+                      padding: 12,
+                      borderRadius: 12,
+                      background:
+                        diferenciaEfectivo >= 0 ? "#dcfce7" : "#fee2e2",
+                      color:
+                        diferenciaEfectivo >= 0 ? "#166534" : "#991b1b",
+                      fontWeight: 900,
+                    }}
+                  >
+                    <span>
+                      {diferenciaEfectivo >= 0 ? "Vuelto" : "Falta"}
+                    </span>
+                    <span>{money(Math.abs(diferenciaEfectivo))}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="app-actions" style={styles.actions}>
@@ -3419,77 +3963,380 @@ function Ventas({
         {ventas.length === 0 ? (
           <Empty text="Todavía no hay ventas registradas." />
         ) : (
-          ventas
-            .slice()
-            .reverse()
-            .map((venta) => {
-              const anulada = venta.estado === "anulada";
-              const puedeAnularEstaVenta =
-                puedeAnularVentas &&
-                !anulada &&
-                caja.abierta &&
-                venta.cajaId === caja.id;
-
-              return (
-                <div key={venta.id} style={styles.saleCard}>
-                  <div className="app-sale-header" style={styles.saleHeader}>
-                    <div>
-                      <div style={styles.saleTitleRow}>
-                        <strong>Venta #{venta.id}</strong>
-                        <Badge danger={anulada}>
-                          {anulada ? "Anulada" : "Activa"}
-                        </Badge>
-                      </div>
-                      <p style={styles.saleMeta}>
-                        {formatDate(venta.fecha)} - {venta.cliente} -{" "}
-                        {venta.medioPago}
-                      </p>
-                    </div>
-
-                    <strong
-                      style={anulada ? styles.cancelledAmount : undefined}
-                    >
-                      {money(venta.total)}
-                    </strong>
-                  </div>
-
-                  {venta.items.length > 0 && (
-                    <div style={styles.saleItems}>
-                      {venta.items.map((item, index) => (
-                        <Row
-                          key={`${venta.id}-${item.productoId}-${index}`}
-                          left={`${item.nombre} x ${item.cantidad}`}
-                          right={money(item.subtotal)}
-                        />
-                      ))}
-                    </div>
-                  )}
-
-                  {anulada && (
-                    <div style={styles.cancellationNotice}>
-                      <strong>Motivo:</strong>{" "}
-                      {venta.motivoAnulacion || "Sin motivo informado"}
-                      {venta.anuladaAt && (
-                        <span> · Anulada el {formatDate(venta.anuladaAt)}</span>
-                      )}
-                    </div>
-                  )}
-
-                  {puedeAnularEstaVenta && (
-                    <div className="app-actions" style={styles.actions}>
-                      <button
-                        style={styles.smallButtonDanger}
-                        onClick={() => iniciarAnulacion(venta)}
-                      >
-                        Anular venta
-                      </button>
-                    </div>
-                  )}
+          <>
+            <div
+              style={{
+                padding: 16,
+                marginBottom: 18,
+                border: "1px solid #dbeafe",
+                borderRadius: 16,
+                background: "#f8fafc",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                  flexWrap: "wrap",
+                  marginBottom: 14,
+                }}
+              >
+                <div>
+                  <strong style={{ color: "#0f172a" }}>Filtrar ventas</strong>
+                  <p style={{ ...styles.text, margin: "4px 0 0" }}>
+                    Combiná uno o varios criterios para encontrar operaciones.
+                  </p>
                 </div>
-              );
-            })
+
+                <SecondaryButton onClick={limpiarFiltrosVentas}>
+                  Limpiar filtros
+                </SecondaryButton>
+              </div>
+
+              <div className="app-form-grid" style={styles.formGrid}>
+                <select
+                  value={filtroPeriodoVentas}
+                  onChange={(event) =>
+                    setFiltroPeriodoVentas(event.target.value)
+                  }
+                  style={styles.input}
+                  aria-label="Filtrar por período"
+                >
+                  <option value="todas">Todas las fechas</option>
+                  <option value="hoy">Hoy</option>
+                  <option value="ultimos7">Últimos 7 días</option>
+                  <option value="mes">Este mes</option>
+                  <option value="personalizado">Rango personalizado</option>
+                </select>
+
+                <select
+                  value={filtroMedioPago}
+                  onChange={(event) =>
+                    setFiltroMedioPago(event.target.value)
+                  }
+                  style={styles.input}
+                  aria-label="Filtrar por medio de pago"
+                >
+                  <option value="Todos">Todos los medios de pago</option>
+                  {mediosPagoEnVentas.map((medio) => (
+                    <option key={medio} value={medio}>
+                      {medio}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={filtroEstadoVenta}
+                  onChange={(event) =>
+                    setFiltroEstadoVenta(event.target.value)
+                  }
+                  style={styles.input}
+                  aria-label="Filtrar por estado"
+                >
+                  <option value="Todas">Todos los estados</option>
+                  <option value="Activas">Activas</option>
+                  <option value="Anuladas">Anuladas</option>
+                </select>
+
+                <select
+                  value={filtroClienteVenta}
+                  onChange={(event) =>
+                    setFiltroClienteVenta(event.target.value)
+                  }
+                  style={styles.input}
+                  aria-label="Filtrar por cliente"
+                >
+                  <option value="Todos">Todos los clientes</option>
+                  {clientesEnVentas.map((nombreCliente) => (
+                    <option key={nombreCliente} value={nombreCliente}>
+                      {nombreCliente}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={filtroProductoVenta}
+                  onChange={(event) =>
+                    setFiltroProductoVenta(event.target.value)
+                  }
+                  style={styles.input}
+                  aria-label="Filtrar por producto"
+                >
+                  <option value="Todos">Todos los productos</option>
+                  {productosEnVentas.map(([productoIdFiltro, nombre]) => (
+                    <option
+                      key={productoIdFiltro}
+                      value={productoIdFiltro}
+                    >
+                      {nombre}
+                    </option>
+                  ))}
+                </select>
+
+                <Input
+                  placeholder="Número de venta"
+                  type="number"
+                  value={filtroNumeroVenta}
+                  onChange={setFiltroNumeroVenta}
+                />
+
+                <Input
+                  placeholder="Importe mínimo"
+                  type="number"
+                  value={filtroImporteMinimo}
+                  onChange={setFiltroImporteMinimo}
+                />
+
+                <Input
+                  placeholder="Importe máximo"
+                  type="number"
+                  value={filtroImporteMaximo}
+                  onChange={setFiltroImporteMaximo}
+                />
+              </div>
+
+              {filtroPeriodoVentas === "personalizado" && (
+                <div
+                  className="app-form-grid-small"
+                  style={{ ...styles.formGridSmall, marginTop: 12 }}
+                >
+                  <label style={{ fontWeight: 700, color: "#334155" }}>
+                    Desde
+                    <input
+                      type="date"
+                      value={filtroFechaDesde}
+                      onChange={(event) =>
+                        setFiltroFechaDesde(event.target.value)
+                      }
+                      style={{ ...styles.input, marginTop: 6 }}
+                    />
+                  </label>
+
+                  <label style={{ fontWeight: 700, color: "#334155" }}>
+                    Hasta
+                    <input
+                      type="date"
+                      value={filtroFechaHasta}
+                      onChange={(event) =>
+                        setFiltroFechaHasta(event.target.value)
+                      }
+                      style={{ ...styles.input, marginTop: 6 }}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            <div className="app-cards-grid" style={styles.cardsGrid}>
+              <Card
+                title="Resultados"
+                value={String(ventasFiltradas.length)}
+              />
+              <Card
+                title="Ventas activas"
+                value={String(ventasActivasFiltradas.length)}
+              />
+              <Card
+                title="Total activo"
+                value={money(totalVentasFiltradas)}
+              />
+              <Card
+                title="Ticket promedio"
+                value={money(ticketPromedioFiltrado)}
+              />
+            </div>
+
+            {ventasAnuladasFiltradas > 0 && (
+              <p style={{ ...styles.text, marginTop: 0 }}>
+                El resultado incluye {ventasAnuladasFiltradas}{" "}
+                {ventasAnuladasFiltradas === 1
+                  ? "venta anulada"
+                  : "ventas anuladas"}. Los totales consideran solamente ventas
+                activas.
+              </p>
+            )}
+
+            {ventasFiltradasOrdenadas.length === 0 ? (
+              <Empty text="No hay ventas que coincidan con los filtros seleccionados." />
+            ) : (
+              ventasFiltradasOrdenadas.map((venta) => {
+                const anulada = venta.estado === "anulada";
+                const puedeAnularEstaVenta =
+                  puedeAnularVentas &&
+                  !anulada &&
+                  caja.abierta &&
+                  venta.cajaId === caja.id;
+
+                return (
+                  <div key={venta.id} style={styles.saleCard}>
+                    <div className="app-sale-header" style={styles.saleHeader}>
+                      <div>
+                        <div style={styles.saleTitleRow}>
+                          <strong>Venta #{venta.id}</strong>
+                          <Badge danger={anulada}>
+                            {anulada ? "Anulada" : "Activa"}
+                          </Badge>
+                        </div>
+                        <p style={styles.saleMeta}>
+                          {formatDate(venta.fecha)} - {venta.cliente} -{" "}
+                          {venta.medioPago}
+                        </p>
+                      </div>
+
+                      <strong
+                        style={anulada ? styles.cancelledAmount : undefined}
+                      >
+                        {money(venta.total)}
+                      </strong>
+                    </div>
+
+                    {venta.items.length > 0 && (
+                      <div style={styles.saleItems}>
+                        {venta.items.map((item, index) => (
+                          <Row
+                            key={`${venta.id}-${item.productoId}-${index}`}
+                            left={`${item.nombre} x ${item.cantidad}`}
+                            right={money(item.subtotal)}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {anulada && (
+                      <div style={styles.cancellationNotice}>
+                        <strong>Motivo:</strong>{" "}
+                        {venta.motivoAnulacion || "Sin motivo informado"}
+                        {venta.anuladaAt && (
+                          <span> · Anulada el {formatDate(venta.anuladaAt)}</span>
+                        )}
+                      </div>
+                    )}
+
+                    {puedeAnularEstaVenta && (
+                      <div className="app-actions" style={styles.actions}>
+                        <button
+                          style={styles.smallButtonDanger}
+                          onClick={() => iniciarAnulacion(venta)}
+                        >
+                          Anular venta
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </>
         )}
       </Panel>
+
+      {mostrarRegistroRapido && (
+        <div className="app-modal-backdrop" style={styles.modalBackdrop}>
+          <div className="app-modal-box" style={styles.modalBox}>
+            <h3 style={styles.panelTitle}>Producto no encontrado</h3>
+            <p style={styles.text}>
+              El código <strong>{nuevoProductoRapido.codigo}</strong> no está
+              registrado. Completá los datos para crearlo sin salir de Ventas.
+            </p>
+
+            <div className="app-form-grid-small" style={styles.formGridSmall}>
+              <Input
+                placeholder="Nombre del producto"
+                value={nuevoProductoRapido.nombre}
+                onChange={(valor) =>
+                  setNuevoProductoRapido({
+                    ...nuevoProductoRapido,
+                    nombre: valor,
+                  })
+                }
+              />
+
+              <Input
+                placeholder="Código de barras o código interno"
+                value={nuevoProductoRapido.codigo}
+                onChange={(valor) =>
+                  setNuevoProductoRapido({
+                    ...nuevoProductoRapido,
+                    codigo: valor,
+                  })
+                }
+              />
+
+              <Input
+                placeholder="Categoría"
+                value={nuevoProductoRapido.categoria}
+                onChange={(valor) =>
+                  setNuevoProductoRapido({
+                    ...nuevoProductoRapido,
+                    categoria: valor,
+                  })
+                }
+              />
+
+              <Input
+                placeholder="Precio de venta"
+                type="number"
+                value={nuevoProductoRapido.precio}
+                onChange={(valor) =>
+                  setNuevoProductoRapido({
+                    ...nuevoProductoRapido,
+                    precio: valor,
+                  })
+                }
+              />
+
+              <Input
+                placeholder="Costo"
+                type="number"
+                value={nuevoProductoRapido.costo}
+                onChange={(valor) =>
+                  setNuevoProductoRapido({
+                    ...nuevoProductoRapido,
+                    costo: valor,
+                  })
+                }
+              />
+
+              <Input
+                placeholder="Stock inicial"
+                type="number"
+                value={nuevoProductoRapido.stock}
+                onChange={(valor) =>
+                  setNuevoProductoRapido({
+                    ...nuevoProductoRapido,
+                    stock: valor,
+                  })
+                }
+              />
+
+              <Input
+                placeholder="Stock mínimo"
+                type="number"
+                value={nuevoProductoRapido.minimo}
+                onChange={(valor) =>
+                  setNuevoProductoRapido({
+                    ...nuevoProductoRapido,
+                    minimo: valor,
+                  })
+                }
+              />
+            </div>
+
+            <div className="app-actions" style={styles.actions}>
+              <Button onClick={registrarProductoDesdeVenta}>
+                {guardandoProductoRapido
+                  ? "Registrando..."
+                  : "Registrar y agregar al carrito"}
+              </Button>
+              <SecondaryButton onClick={cancelarRegistroRapidoProducto}>
+                Cancelar
+              </SecondaryButton>
+            </div>
+          </div>
+        </div>
+      )}
 
       {ventaAnulando && (
         <div className="app-modal-backdrop" style={styles.modalBackdrop}>

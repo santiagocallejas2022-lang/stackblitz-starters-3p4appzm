@@ -80,6 +80,8 @@ type Venta = {
   motivoAnulacion: string;
   anuladaAt: string | null;
   anuladaPor: string | null;
+  registradaPor: string | null;
+  registradaPorEmail: string;
 };
 
 type MovimientoCaja = {
@@ -230,6 +232,31 @@ function esFechaDeHoy(value?: string | null) {
   );
 }
 
+const TAMANO_BLOQUE_CARGA = 500;
+
+async function cargarTodosLosRegistrosPorBloques(
+  crearConsulta: (desde: number, hasta: number) => any,
+) {
+  const registros: any[] = [];
+  let desde = 0;
+
+  while (true) {
+    const hasta = desde + TAMANO_BLOQUE_CARGA - 1;
+    const { data, error } = await crearConsulta(desde, hasta);
+
+    if (error) throw error;
+
+    const bloque = data || [];
+    registros.push(...bloque);
+
+    if (bloque.length < TAMANO_BLOQUE_CARGA) break;
+
+    desde += TAMANO_BLOQUE_CARGA;
+  }
+
+  return registros;
+}
+
 export default function Home() {
   const [seccion, setSeccion] = useState<Seccion>("inicio");
   const [usuario, setUsuario] = useState<any>(null);
@@ -238,6 +265,9 @@ export default function Home() {
   const [cargandoUsuario, setCargandoUsuario] = useState(true);
   const [cargandoDatos, setCargandoDatos] = useState(false);
   const [modoRegistro, setModoRegistro] = useState(false);
+  const [estadoSincronizacion, setEstadoSincronizacion] = useState<
+    "conectando" | "activa" | "error"
+  >("conectando");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -296,6 +326,149 @@ export default function Home() {
       cargarComercioYDatos();
     }
   }, [usuario]);
+
+  useEffect(() => {
+    const comercioId = comercioActual?.id;
+
+    if (!usuario || !comercioId) {
+      setEstadoSincronizacion("conectando");
+      return;
+    }
+
+    setEstadoSincronizacion("conectando");
+
+    const temporizadores = new Map<string, ReturnType<typeof setTimeout>>();
+
+    function programarActualizacion(
+      clave: string,
+      actualizar: () => Promise<unknown>,
+    ) {
+      const temporizadorAnterior = temporizadores.get(clave);
+
+      if (temporizadorAnterior) {
+        clearTimeout(temporizadorAnterior);
+      }
+
+      const temporizador = setTimeout(() => {
+        temporizadores.delete(clave);
+        actualizar().catch((error) => {
+          console.error(`Error de sincronización (${clave}):`, error);
+        });
+      }, 450);
+
+      temporizadores.set(clave, temporizador);
+    }
+
+    const actualizarOperacion = () =>
+      Promise.all([
+        cargarProductos(comercioId),
+        cargarVentas(comercioId),
+        cargarCajasYMovimientos(comercioId),
+      ]);
+
+    const canal = supabase
+      .channel(`comercio-${comercioId}-sincronizacion`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "productos",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () => programarActualizacion("operacion", actualizarOperacion),
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "ventas",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () => programarActualizacion("operacion", actualizarOperacion),
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "venta_items",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () => programarActualizacion("operacion", actualizarOperacion),
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "cajas",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () => programarActualizacion("operacion", actualizarOperacion),
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "movimientos_caja",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () => programarActualizacion("operacion", actualizarOperacion),
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "clientes",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () =>
+          programarActualizacion("clientes", () => cargarClientes(comercioId)),
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "gastos",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () => programarActualizacion("gastos", () => cargarGastos(comercioId)),
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "ingresos_stock",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () =>
+          programarActualizacion("stock", () =>
+            Promise.all([
+              cargarIngresosStock(comercioId),
+              cargarProductos(comercioId),
+            ]),
+          ),
+      )
+      .subscribe((estado) => {
+        if (estado === "SUBSCRIBED") {
+          setEstadoSincronizacion("activa");
+        } else if (estado === "CHANNEL_ERROR" || estado === "TIMED_OUT") {
+          setEstadoSincronizacion("error");
+        }
+      });
+
+    return () => {
+      temporizadores.forEach((temporizador) => clearTimeout(temporizador));
+      temporizadores.clear();
+      supabase.removeChannel(canal);
+    };
+  }, [usuario?.id, comercioActual?.id]);
 
   async function cargarComercioYDatos() {
     if (!usuario) return;
@@ -378,94 +551,109 @@ export default function Home() {
   }
 
   async function cargarProductos(comercioId: number) {
-    const { data, error } = await supabase
-      .from("productos")
-      .select("*")
-      .eq("comercio_id", comercioId)
-      .order("id", { ascending: true });
+    try {
+      const data = await cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+        supabase
+          .from("productos")
+          .select("*")
+          .eq("comercio_id", comercioId)
+          .order("id", { ascending: true })
+          .range(desde, hasta),
+      );
 
-    if (error) {
-      alert("Error al cargar productos: " + error.message);
-      return;
+      setProductos(data.map((p: any) => normalizarProducto(p)));
+    } catch (error: any) {
+      alert("Error al cargar productos: " + (error?.message || error));
     }
-
-    setProductos((data || []).map((p: any) => normalizarProducto(p)));
   }
-
   async function cargarIngresosStock(comercioId: number) {
-    const { data, error } = await supabase
-      .from("ingresos_stock")
-      .select("*")
-      .eq("comercio_id", comercioId)
-      .order("created_at", { ascending: false })
-      .limit(100);
+    try {
+      const data = await cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+        supabase
+          .from("ingresos_stock")
+          .select("*")
+          .eq("comercio_id", comercioId)
+          .order("id", { ascending: true })
+          .range(desde, hasta),
+      );
 
-    if (error) {
-      console.error("Error al cargar historial de stock:", error.message);
+      const ingresosOrdenados = data
+        .map((item: any) => normalizarIngresoStock(item))
+        .sort(
+          (a: IngresoStock, b: IngresoStock) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        );
+
+      setIngresosStock(ingresosOrdenados);
+    } catch (error: any) {
+      console.error(
+        "Error al cargar historial de stock:",
+        error?.message || error,
+      );
       setIngresosStock([]);
-      return;
     }
-
-    setIngresosStock((data || []).map((item: any) => normalizarIngresoStock(item)));
   }
-
   async function cargarClientes(comercioId: number) {
-    const { data, error } = await supabase
-      .from("clientes")
-      .select("*")
-      .eq("comercio_id", comercioId)
-      .order("id", { ascending: true });
+    try {
+      const data = await cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+        supabase
+          .from("clientes")
+          .select("*")
+          .eq("comercio_id", comercioId)
+          .order("id", { ascending: true })
+          .range(desde, hasta),
+      );
 
-    if (error) {
-      alert("Error al cargar clientes: " + error.message);
-      return;
+      setClientes(
+        data.map((c: any) => ({
+          id: c.id,
+          comercioId: c.comercio_id,
+          nombre: c.nombre,
+          telefono: c.telefono || "",
+        })),
+      );
+    } catch (error: any) {
+      alert("Error al cargar clientes: " + (error?.message || error));
     }
-
-    setClientes(
-      (data || []).map((c: any) => ({
-        id: c.id,
-        comercioId: c.comercio_id,
-        nombre: c.nombre,
-        telefono: c.telefono || "",
-      })),
-    );
   }
-
   async function cargarVentas(comercioId: number) {
-    const { data: ventasData, error: ventasError } = await supabase
-      .from("ventas")
-      .select("*")
-      .eq("comercio_id", comercioId)
-      .order("id", { ascending: true });
+    try {
+      const [ventasData, itemsData] = await Promise.all([
+        cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+          supabase
+            .from("ventas")
+            .select("*")
+            .eq("comercio_id", comercioId)
+            .order("id", { ascending: true })
+            .range(desde, hasta),
+        ),
+        cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+          supabase
+            .from("venta_items")
+            .select("*")
+            .eq("comercio_id", comercioId)
+            .order("id", { ascending: true })
+            .range(desde, hasta),
+        ),
+      ]);
 
-    if (ventasError) {
-      alert("Error al cargar ventas: " + ventasError.message);
-      return;
-    }
+      const itemsPorVenta = new Map<number, ItemVenta[]>();
 
-    const { data: itemsData, error: itemsError } = await supabase
-      .from("venta_items")
-      .select("*")
-      .eq("comercio_id", comercioId)
-      .order("id", { ascending: true });
-
-    if (itemsError) {
-      alert("Error al cargar items de venta: " + itemsError.message);
-      return;
-    }
-
-    const ventasNormalizadas: Venta[] = (ventasData || []).map((v: any) => {
-      const items = (itemsData || [])
-        .filter((item: any) => item.venta_id === v.id)
-        .map((item: any) => ({
+      itemsData.forEach((item: any) => {
+        const itemNormalizado: ItemVenta = {
           productoId: item.producto_id,
           nombre: item.nombre_producto,
           cantidad: Number(item.cantidad),
           precioUnitario: Number(item.precio_unitario),
           subtotal: Number(item.subtotal),
-        }));
+        };
 
-      return {
+        const itemsExistentes = itemsPorVenta.get(item.venta_id) || [];
+        itemsExistentes.push(itemNormalizado);
+        itemsPorVenta.set(item.venta_id, itemsExistentes);
+      });
+
+      const ventasNormalizadas: Venta[] = ventasData.map((v: any) => ({
         id: v.id,
         comercioId: v.comercio_id,
         fecha: v.fecha,
@@ -478,126 +666,145 @@ export default function Home() {
         motivoAnulacion: v.motivo_anulacion || "",
         anuladaAt: v.anulada_at || null,
         anuladaPor: v.anulada_por || null,
-        items,
-      };
-    });
+        registradaPor: v.registrada_por || null,
+        registradaPorEmail: v.registrada_por_email || "",
+        items: itemsPorVenta.get(v.id) || [],
+      }));
 
-    setVentas(ventasNormalizadas);
+      setVentas(ventasNormalizadas);
+    } catch (error: any) {
+      alert("Error al cargar ventas: " + (error?.message || error));
+    }
   }
-
   async function cargarCajasYMovimientos(comercioId: number) {
-    const { data: cajasData, error: cajasError } = await supabase
-      .from("cajas")
-      .select("*")
-      .eq("comercio_id", comercioId)
-      .order("id", { ascending: true });
+    try {
+      const [cajasData, movimientosData] = await Promise.all([
+        cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+          supabase
+            .from("cajas")
+            .select("*")
+            .eq("comercio_id", comercioId)
+            .order("id", { ascending: true })
+            .range(desde, hasta),
+        ),
+        cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+          supabase
+            .from("movimientos_caja")
+            .select("*")
+            .eq("comercio_id", comercioId)
+            .order("id", { ascending: true })
+            .range(desde, hasta),
+        ),
+      ]);
 
-    if (cajasError) {
-      alert("Error al cargar cajas: " + cajasError.message);
-      return;
-    }
+      const movimientosNormalizados: MovimientoCaja[] = movimientosData.map(
+        (m: any) => ({
+          id: m.id,
+          comercioId: m.comercio_id,
+          cajaId: m.caja_id,
+          ventaId: m.venta_id,
+          fecha: m.fecha,
+          tipo: m.tipo,
+          concepto: m.concepto,
+          monto: Number(m.monto),
+        }),
+      );
 
-    const { data: movimientosData, error: movimientosError } = await supabase
-      .from("movimientos_caja")
-      .select("*")
-      .eq("comercio_id", comercioId)
-      .order("id", { ascending: true });
+      setMovimientosCaja(movimientosNormalizados);
 
-    if (movimientosError) {
-      alert("Error al cargar movimientos de caja: " + movimientosError.message);
-      return;
-    }
+      const cajasNormalizadas: Caja[] = cajasData.map((c: any) => ({
+        id: c.id,
+        comercioId: c.comercio_id,
+        abierta: Boolean(c.abierta),
+        fechaApertura: c.fecha_apertura,
+        fechaCierre: c.fecha_cierre,
+        saldoInicial: Number(c.saldo_inicial),
+        saldoFinalReal:
+          c.saldo_final_real === null ? null : Number(c.saldo_final_real),
+      }));
 
-    const movimientosNormalizados: MovimientoCaja[] = (
-      movimientosData || []
-    ).map((m: any) => ({
-      id: m.id,
-      comercioId: m.comercio_id,
-      cajaId: m.caja_id,
-      ventaId: m.venta_id,
-      fecha: m.fecha,
-      tipo: m.tipo,
-      concepto: m.concepto,
-      monto: Number(m.monto),
-    }));
+      const cajaAbierta = cajasNormalizadas.find((c) => c.abierta);
+      setCaja(cajaAbierta || cajaVacia(comercioId));
 
-    setMovimientosCaja(movimientosNormalizados);
+      const movimientosPorCaja = new Map<number, MovimientoCaja[]>();
 
-    const cajasNormalizadas: Caja[] = (cajasData || []).map((c: any) => ({
-      id: c.id,
-      comercioId: c.comercio_id,
-      abierta: Boolean(c.abierta),
-      fechaApertura: c.fecha_apertura,
-      fechaCierre: c.fecha_cierre,
-      saldoInicial: Number(c.saldo_inicial),
-      saldoFinalReal:
-        c.saldo_final_real === null ? null : Number(c.saldo_final_real),
-    }));
-
-    const cajaAbierta = cajasNormalizadas.find((c) => c.abierta);
-    setCaja(cajaAbierta || cajaVacia(comercioId));
-
-    const historial = cajasNormalizadas
-      .filter((c) => !c.abierta && c.fechaCierre && c.saldoFinalReal !== null)
-      .map((c) => {
-        const movimientosDeCaja = movimientosNormalizados.filter(
-          (m) => m.cajaId === c.id,
-        );
-
-        const ingresos = movimientosDeCaja
-          .filter((m) => m.tipo === "Ingreso")
-          .reduce((acc, m) => acc + m.monto, 0);
-
-        const egresos = movimientosDeCaja
-          .filter((m) => m.tipo === "Egreso")
-          .reduce((acc, m) => acc + m.monto, 0);
-
-        const saldoEsperado = c.saldoInicial + ingresos - egresos;
-        const saldoFinalReal = c.saldoFinalReal || 0;
-
-        return {
-          id: c.id,
-          fechaApertura: c.fechaApertura,
-          fechaCierre: c.fechaCierre || "",
-          saldoInicial: c.saldoInicial,
-          ingresos,
-          egresos,
-          saldoEsperado,
-          saldoFinalReal,
-          diferencia: saldoFinalReal - saldoEsperado,
-        };
+      movimientosNormalizados.forEach((movimiento) => {
+        const movimientosExistentes =
+          movimientosPorCaja.get(movimiento.cajaId) || [];
+        movimientosExistentes.push(movimiento);
+        movimientosPorCaja.set(movimiento.cajaId, movimientosExistentes);
       });
 
-    setHistorialCajas(historial);
-  }
+      const historial = cajasNormalizadas
+        .filter((c) => !c.abierta && c.fechaCierre && c.saldoFinalReal !== null)
+        .map((c) => {
+          const movimientosDeCaja = movimientosPorCaja.get(c.id) || [];
 
-  async function cargarGastos(comercioId: number) {
-    const { data, error } = await supabase
-      .from("gastos")
-      .select("*")
-      .eq("comercio_id", comercioId)
-      .order("fecha", { ascending: false });
+          const ingresos = movimientosDeCaja
+            .filter((m) => m.tipo === "Ingreso")
+            .reduce((acc, m) => acc + m.monto, 0);
 
-    if (error) {
-      alert("Error al cargar gastos: " + error.message);
-      return;
+          const egresos = movimientosDeCaja
+            .filter((m) => m.tipo === "Egreso")
+            .reduce((acc, m) => acc + m.monto, 0);
+
+          const saldoEsperado = c.saldoInicial + ingresos - egresos;
+          const saldoFinalReal = c.saldoFinalReal || 0;
+
+          return {
+            id: c.id,
+            fechaApertura: c.fechaApertura,
+            fechaCierre: c.fechaCierre || "",
+            saldoInicial: c.saldoInicial,
+            ingresos,
+            egresos,
+            saldoEsperado,
+            saldoFinalReal,
+            diferencia: saldoFinalReal - saldoEsperado,
+          };
+        });
+
+      setHistorialCajas(historial);
+    } catch (error: any) {
+      alert(
+        "Error al cargar cajas y movimientos: " +
+          (error?.message || error),
+      );
     }
-
-    setGastos(
-      (data || []).map((g: any) => ({
-        id: g.id,
-        comercioId: g.comercio_id,
-        fecha: g.fecha,
-        categoria: g.categoria || "",
-        concepto: g.concepto || "",
-        proveedor: g.proveedor || "",
-        monto: Number(g.monto || 0),
-        medioPago: g.medio_pago || "",
-        observaciones: g.observaciones || "",
-      })),
-    );
   }
+  async function cargarGastos(comercioId: number) {
+    try {
+      const data = await cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+        supabase
+          .from("gastos")
+          .select("*")
+          .eq("comercio_id", comercioId)
+          .order("id", { ascending: true })
+          .range(desde, hasta),
+      );
 
+      const gastosNormalizados = data
+        .map((g: any) => ({
+          id: g.id,
+          comercioId: g.comercio_id,
+          fecha: g.fecha,
+          categoria: g.categoria || "",
+          concepto: g.concepto || "",
+          proveedor: g.proveedor || "",
+          monto: Number(g.monto || 0),
+          medioPago: g.medio_pago || "",
+          observaciones: g.observaciones || "",
+        }))
+        .sort(
+          (a: Gasto, b: Gasto) =>
+            new Date(b.fecha).getTime() - new Date(a.fecha).getTime(),
+        );
+
+      setGastos(gastosNormalizados);
+    } catch (error: any) {
+      alert("Error al cargar gastos: " + (error?.message || error));
+    }
+  }
   async function cargarCapacitaciones(comercioId: number, rol?: string) {
     const { data: capacitacionesData, error: capacitacionesError } =
       await supabase
@@ -1080,6 +1287,7 @@ export default function Home() {
               ventasCajaActual={ventasCajaActual}
               alertas={alertasComercio}
               mostrarCentroAlertas={!esSecretaria}
+              estadoSincronizacion={estadoSincronizacion}
               setSeccion={setSeccion}
             />
           )}
@@ -1307,35 +1515,16 @@ function Sidebar({
   cerrarSesion: () => void;
 }) {
   const [menuAbierto, setMenuAbierto] = useState(false);
-  const grupos: {
-    titulo: string;
-    items: { id: Seccion; label: string; icono: string }[];
-  }[] = [
-    {
-      titulo: "Gestión",
-      items: [
-        { id: "inicio", label: "Inicio", icono: "◆" },
-        { id: "miComercio", label: "Mi comercio", icono: "◎" },
-        { id: "productos", label: "Productos", icono: "▦" },
-        { id: "clientes", label: "Clientes", icono: "◉" },
-      ],
-    },
-    {
-      titulo: "Operación",
-      items: [
-        { id: "ventas", label: "Ventas", icono: "↗" },
-        { id: "caja", label: "Caja", icono: "$" },
-        { id: "gastos", label: "Gastos", icono: "−" },
-      ],
-    },
-    {
-      titulo: "Análisis",
-      items: [{ id: "reportes", label: "Reportes", icono: "▣" }],
-    },
-    {
-      titulo: "Secretaría",
-      items: [{ id: "capacitaciones", label: "Capacitaciones", icono: "✦" }],
-    },
+  const items: { id: Seccion; label: string; icono: string }[] = [
+    { id: "inicio", label: "Inicio", icono: "⌂" },
+    { id: "miComercio", label: "Mi comercio", icono: "◇" },
+    { id: "productos", label: "Productos", icono: "⬡" },
+    { id: "clientes", label: "Clientes", icono: "◎" },
+    { id: "ventas", label: "Ventas", icono: "↗" },
+    { id: "caja", label: "Caja", icono: "▤" },
+    { id: "gastos", label: "Gastos", icono: "−" },
+    { id: "reportes", label: "Reportes", icono: "▣" },
+    { id: "capacitaciones", label: "Capacitaciones", icono: "✦" },
   ];
 
   const etiquetaRol =
@@ -1343,12 +1532,17 @@ function Sidebar({
 
   return (
     <aside className="app-sidebar" style={styles.sidebar}>
+      <div style={styles.sidebarGridOverlay} />
       <div style={styles.sidebarGlow} />
+      <div style={styles.sidebarNeonRail} />
 
       <div className="app-sidebar-header" style={styles.sidebarHeaderBox}>
-        <p style={styles.logoKicker}>Sistema de Gestión</p>
+        <div style={styles.sidebarEmblem} aria-hidden="true">
+          <span style={styles.sidebarEmblemCore}>⬡</span>
+        </div>
+        <p style={styles.logoKicker}>Centro de gestión</p>
         <h1 style={styles.logo}>{comercioActual?.nombre || "Mi Comercio"}</h1>
-        <div style={styles.rolePill}>{etiquetaRol}</div>
+        <div style={styles.sidebarSystemTag}>SISTEMA CONECTADO</div>
       </div>
 
       <button
@@ -1366,56 +1560,53 @@ function Sidebar({
         id="menu-principal-comercio"
         className={`app-sidebar-body ${menuAbierto ? "open" : ""}`}
       >
-        <p className="app-sidebar-email" style={styles.sidebarEmail}>
-          {emailUsuario}
+        <p className="app-nav-group-title" style={styles.navGroupTitle}>
+          Navegación
         </p>
 
-        <nav className="app-sidebar-nav" style={{ marginTop: 26 }}>
-          {grupos.map((grupo) => (
-            <div
-              key={grupo.titulo}
-              className="app-nav-group"
-              style={{ marginBottom: 18 }}
-            >
-              <p className="app-nav-group-title" style={styles.navGroupTitle}>
-                {grupo.titulo}
-              </p>
-              {grupo.items.map((item) => {
-                const activo = seccion === item.id;
+        <nav className="app-sidebar-nav" style={{ marginTop: 10 }}>
+          {items.map((item) => {
+            const activo = seccion === item.id;
 
-                return (
-                  <button
-                    key={item.id}
-                    className="app-nav-item"
-                    onClick={() => {
-                      setSeccion(item.id);
-                      setMenuAbierto(false);
-                    }}
-                    style={{
-                      ...styles.navItem,
-                      background: activo
-                        ? "linear-gradient(135deg, rgba(220,38,38,0.98), rgba(127,29,29,0.94))"
-                        : "rgba(15, 23, 42, 0.24)",
-                      color: activo ? "white" : "#cbd5e1",
-                      borderColor: activo
-                        ? "rgba(248, 113, 113, 0.75)"
-                        : "rgba(148, 163, 184, 0.12)",
-                      boxShadow: activo
-                        ? "0 12px 24px rgba(127, 29, 29, 0.35)"
-                        : "none",
-                    }}
-                  >
-                    <span style={styles.navIcon}>{item.icono}</span>
-                    <span>{item.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+            return (
+              <button
+                key={item.id}
+                className={`app-nav-item ${activo ? "active" : ""}`}
+                aria-current={activo ? "page" : undefined}
+                onClick={() => {
+                  setSeccion(item.id);
+                  setMenuAbierto(false);
+                }}
+                style={{
+                  ...styles.navItem,
+                  background: activo
+                    ? "linear-gradient(90deg, rgba(239,68,68,0.28), rgba(127,29,29,0.10))"
+                    : "rgba(8, 15, 29, 0.58)",
+                  color: activo ? "#ffffff" : "#cbd5e1",
+                  borderColor: activo
+                    ? "rgba(248, 113, 113, 0.72)"
+                    : "rgba(148, 163, 184, 0.10)",
+                  boxShadow: activo
+                    ? "inset 4px 0 0 #ef4444, 0 0 24px rgba(239,68,68,0.20)"
+                    : "inset 1px 0 0 rgba(255,255,255,0.02)",
+                }}
+              >
+                <span style={styles.navIcon}>{item.icono}</span>
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
         </nav>
 
+        <div style={styles.sidebarIdentity}>
+          <span style={styles.rolePill}>{etiquetaRol}</span>
+          <p className="app-sidebar-email" style={styles.sidebarEmail}>
+            {emailUsuario}
+          </p>
+        </div>
+
         <button onClick={cerrarSesion} style={styles.logoutButton}>
-          Cerrar sesión
+          <span aria-hidden="true">⇥</span> Cerrar sesión
         </button>
       </div>
     </aside>
@@ -1433,6 +1624,7 @@ function Inicio({
   ventasCajaActual,
   alertas,
   mostrarCentroAlertas,
+  estadoSincronizacion,
   setSeccion,
 }: {
   comercioActual: Comercio | null;
@@ -1445,9 +1637,52 @@ function Inicio({
   ventasCajaActual: Venta[];
   alertas: AlertaComercio[];
   mostrarCentroAlertas: boolean;
+  estadoSincronizacion: "conectando" | "activa" | "error";
   setSeccion: (seccion: Seccion) => void;
 }) {
-  const [mostrarAlertas, setMostrarAlertas] = useState(true);
+  const [mostrarAlertas, setMostrarAlertas] = useState(false);
+  const [alertasRevisadas, setAlertasRevisadas] = useState(false);
+
+  const hayCriticas = alertas.some((alerta) => alerta.nivel === "critica");
+  const hayAdvertencias = alertas.some(
+    (alerta) => alerta.nivel === "advertencia",
+  );
+  const firmaAlertas = alertas
+    .map((alerta) => `${alerta.id}:${alerta.nivel}`)
+    .sort()
+    .join("|");
+
+  useEffect(() => {
+    setAlertasRevisadas(false);
+  }, [firmaAlertas]);
+
+  const aparienciaBotonAlertas = hayCriticas
+    ? {
+        background: "linear-gradient(135deg, #ef4444, #7f1d1d)",
+        color: "#ffffff",
+        borderColor: "rgba(254, 202, 202, 0.88)",
+        boxShadow: "0 0 0 1px rgba(239,68,68,0.25), 0 12px 30px rgba(185,28,28,0.32)",
+      }
+    : hayAdvertencias
+      ? {
+          background: "linear-gradient(135deg, #fb923c, #c2410c)",
+          color: "#ffffff",
+          borderColor: "#fed7aa",
+          boxShadow: "0 12px 26px rgba(194,65,12,0.22)",
+        }
+      : alertas.length > 0
+        ? {
+            background: "linear-gradient(135deg, #2563eb, #1e40af)",
+            color: "#ffffff",
+            borderColor: "#bfdbfe",
+            boxShadow: "0 12px 26px rgba(37,99,235,0.20)",
+          }
+        : {
+            background: "rgba(255,255,255,0.96)",
+            color: "#475569",
+            borderColor: "#dbe3ee",
+            boxShadow: "0 10px 24px rgba(15,23,42,0.08)",
+          };
 
   return (
     <>
@@ -1459,19 +1694,75 @@ function Inicio({
             : "Resumen operativo del comercio."
         }
         action={
-          mostrarCentroAlertas ? (
-            <button
-              type="button"
-              style={styles.alertBellButton}
-              onClick={() => setMostrarAlertas((valor) => !valor)}
-              aria-label="Mostrar u ocultar alertas y novedades"
-              aria-expanded={mostrarAlertas}
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <span
+              className="app-sync-badge"
+              style={{
+                ...styles.syncBadge,
+                background:
+                  estadoSincronizacion === "activa"
+                    ? "rgba(16,185,129,0.10)"
+                    : estadoSincronizacion === "error"
+                      ? "rgba(239,68,68,0.10)"
+                      : "rgba(245,158,11,0.12)",
+                color:
+                  estadoSincronizacion === "activa"
+                    ? "#047857"
+                    : estadoSincronizacion === "error"
+                      ? "#b91c1c"
+                      : "#92400e",
+                borderColor:
+                  estadoSincronizacion === "activa"
+                    ? "rgba(16,185,129,0.28)"
+                    : estadoSincronizacion === "error"
+                      ? "rgba(239,68,68,0.28)"
+                      : "rgba(245,158,11,0.30)",
+              }}
             >
-              <span aria-hidden="true">🔔</span>
-              <span>Alertas</span>
-              <span style={styles.alertBellCount}>{alertas.length}</span>
-            </button>
-          ) : undefined
+              <span style={styles.syncDot} aria-hidden="true" />
+              {estadoSincronizacion === "activa"
+                ? "Sincronización activa"
+                : estadoSincronizacion === "error"
+                  ? "Sin conexión en tiempo real"
+                  : "Conectando equipos"}
+            </span>
+
+            {mostrarCentroAlertas && (
+              <button
+                type="button"
+                className={`app-alert-button ${
+                  hayCriticas
+                    ? "is-critical"
+                    : hayAdvertencias
+                      ? "is-warning"
+                      : alertas.length > 0
+                        ? "is-info"
+                        : "is-clear"
+                } ${alertasRevisadas ? "is-reviewed" : ""}`}
+                style={{
+                  ...styles.alertBellButton,
+                  ...aparienciaBotonAlertas,
+                }}
+                onClick={() => {
+                  setAlertasRevisadas(true);
+                  setMostrarAlertas((valor) => !valor);
+                }}
+                aria-label="Mostrar u ocultar alertas y novedades"
+                aria-expanded={mostrarAlertas}
+              >
+                <span aria-hidden="true">🔔</span>
+                <span>Alertas</span>
+                <span style={styles.alertBellCount}>{alertas.length}</span>
+              </button>
+            )}
+          </div>
         }
       />
 
@@ -1506,6 +1797,7 @@ function Inicio({
                 const apariencia =
                   alerta.nivel === "critica"
                     ? {
+                        etiqueta: "CRÍTICA",
                         icono: "!",
                         fondo: "#fff1f2",
                         borde: "#fecdd3",
@@ -1513,12 +1805,14 @@ function Inicio({
                       }
                     : alerta.nivel === "advertencia"
                       ? {
+                          etiqueta: "ADVERTENCIA",
                           icono: "▲",
                           fondo: "#fff7ed",
                           borde: "#fed7aa",
                           color: "#c2410c",
                         }
                       : {
+                          etiqueta: "INFORMACIÓN",
                           icono: "i",
                           fondo: "#eff6ff",
                           borde: "#bfdbfe",
@@ -1546,6 +1840,14 @@ function Inicio({
                     </span>
 
                     <div style={styles.alertContent}>
+                      <span
+                        style={{
+                          ...styles.alertSeverityLabel,
+                          color: apariencia.color,
+                        }}
+                      >
+                        {apariencia.etiqueta}
+                      </span>
                       <strong
                         style={{
                           ...styles.alertTitle,
@@ -1573,27 +1875,55 @@ function Inicio({
       )}
 
       <div className="app-cards-grid" style={styles.cardsGrid}>
-        <Card title="Ventas totales" value={money(ventasDelDia)} />
-        <Card title="Caja abierta" value={caja.abierta ? "Sí" : "No"} />
-        <Card title="Saldo actual caja" value={money(saldoCajaEstimado)} />
-        <Card title="Stock bajo" value={String(productosStockBajo.length)} />
+        <Card
+          title="Ventas totales"
+          value={money(ventasDelDia)}
+          description="Importe acumulado de ventas activas."
+          tone="blue"
+        />
+        <Card
+          title="Caja abierta"
+          value={caja.abierta ? "Sí" : "No"}
+          description="Estado actual de la caja compartida."
+          tone={caja.abierta ? "green" : "neutral"}
+        />
+        <Card
+          title="Saldo actual caja"
+          value={money(saldoCajaEstimado)}
+          description="Saldo inicial más ingresos menos egresos."
+          tone="purple"
+        />
+        <Card
+          title="Stock bajo"
+          value={String(productosStockBajo.length)}
+          description="Productos que necesitan reposición."
+          tone={productosStockBajo.length > 0 ? "red" : "green"}
+        />
       </div>
 
-      <div className="app-cards-grid" style={styles.cardsGrid}>
-        <Card title="Productos" value={String(productos.length)} />
+      <div
+        className="app-cards-grid app-cards-grid-three"
+        style={styles.cardsGridThree}
+      >
+        <Card
+          title="Productos"
+          value={String(productos.length)}
+          description="Productos cargados en el comercio."
+          tone="cyan"
+        />
         <Card
           title="Ventas caja actual"
           value={String(ventasCajaActual.length)}
-        />
-        <Card
-          title="Caja actual"
-          value={caja.abierta ? "Abierta" : "Sin caja"}
+          description="Operaciones registradas desde la apertura."
+          tone="orange"
         />
         <Card
           title="Apertura"
           value={
             caja.fechaApertura ? formatDate(caja.fechaApertura) : "Sin apertura"
           }
+          description="Fecha y hora de inicio de la caja actual."
+          tone="neutral"
         />
       </div>
 
@@ -2194,6 +2524,65 @@ function Clientes({
     setTelefono(cliente.telefono || "");
   }
 
+  function normalizarTelefonoWhatsApp(telefonoCliente: string) {
+    let digitos = telefonoCliente.replace(/\D/g, "");
+
+    if (!digitos) return null;
+
+    // Acepta números ya guardados como +54 9... o 54 9...
+    if (digitos.startsWith("549")) {
+      const numeroNacional = digitos.slice(3);
+      return numeroNacional.length === 10 ? digitos : null;
+    }
+
+    // Si está guardado con +54 pero sin el 9 móvil, lo agrega.
+    if (digitos.startsWith("54")) {
+      const numeroNacional = digitos.slice(2).replace(/^0+/, "");
+      return numeroNacional.length === 10 ? `549${numeroNacional}` : null;
+    }
+
+    // Elimina el 0 usado en llamadas nacionales: 011..., 0221..., etc.
+    digitos = digitos.replace(/^0+/, "");
+
+    // Elimina el 15 local cuando fue escrito después del código de área.
+    // Ejemplos: 11 15 1234-5678 o 221 15 123-4567.
+    for (let largoArea = 2; largoArea <= 4; largoArea += 1) {
+      const tieneQuince = digitos.slice(largoArea, largoArea + 2) === "15";
+      const resto = digitos.slice(largoArea + 2);
+
+      if (tieneQuince && largoArea + resto.length === 10) {
+        digitos = digitos.slice(0, largoArea) + resto;
+        break;
+      }
+    }
+
+    if (digitos.length !== 10) return null;
+
+    return `549${digitos}`;
+  }
+
+  function abrirWhatsApp(cliente: Cliente) {
+    if (!cliente.telefono.trim()) {
+      alert("Este cliente no tiene un teléfono cargado. Editalo antes de abrir WhatsApp.");
+      return;
+    }
+
+    const telefonoWhatsApp = normalizarTelefonoWhatsApp(cliente.telefono);
+
+    if (!telefonoWhatsApp) {
+      alert(
+        "No se pudo reconocer el teléfono. Cargalo con código de área, por ejemplo: 11 2345-6789.",
+      );
+      return;
+    }
+
+    window.open(
+      `https://wa.me/${telefonoWhatsApp}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
+  }
+
   async function agregarCliente() {
     if (!comercioActual) {
       alert("No hay comercio asociado.");
@@ -2337,6 +2726,17 @@ function Clientes({
                     >
                       {mostrarHistorial ? "Ocultar historial" : "Ver historial"}
                     </button>
+                    <button
+                      type="button"
+                      style={{
+                        ...styles.smallButton,
+                        background: "#dcfce7",
+                        color: "#166534",
+                      }}
+                      onClick={() => abrirWhatsApp(cliente)}
+                    >
+                      WhatsApp
+                    </button>
                   </div>
                 </div>
 
@@ -2443,39 +2843,27 @@ function Caja({
       return;
     }
 
-    if (!saldoInicial) {
-      alert("Ingresá un saldo inicial.");
+    const saldo = Number(saldoInicial.replace(",", "."));
+
+    if (!saldoInicial.trim() || !Number.isFinite(saldo) || saldo < 0) {
+      alert("Ingresá un saldo inicial válido.");
       return;
     }
 
-    const { data, error } = await supabase
-      .from("cajas")
-      .insert({
-        comercio_id: comercioActual.id,
-        abierta: true,
-        saldo_inicial: Number(saldoInicial),
-      })
-      .select()
-      .single();
+    const { error } = await supabase.rpc("abrir_caja_segura", {
+      p_comercio_id: comercioActual.id,
+      p_saldo_inicial: saldo,
+    });
 
     if (error) {
       alert("Error al abrir caja: " + error.message);
+      await recargarDatos();
       return;
     }
 
-    setCaja({
-      id: data.id,
-      comercioId: data.comercio_id,
-      abierta: Boolean(data.abierta),
-      fechaApertura: data.fecha_apertura,
-      fechaCierre: data.fecha_cierre,
-      saldoInicial: Number(data.saldo_inicial),
-      saldoFinalReal:
-        data.saldo_final_real === null ? null : Number(data.saldo_final_real),
-    });
-
     setSaldoInicial("");
     await recargarDatos();
+    alert("Caja abierta correctamente.");
   }
 
   async function agregarMovimiento() {
@@ -2489,41 +2877,30 @@ function Caja({
       return;
     }
 
-    if (!concepto || !monto) {
+    const montoNumero = Number(monto.replace(",", "."));
+
+    if (!concepto.trim() || !monto.trim()) {
       alert("Completá concepto y monto.");
       return;
     }
 
-    const { data, error } = await supabase
-      .from("movimientos_caja")
-      .insert({
-        comercio_id: comercioActual.id,
-        caja_id: caja.id,
-        tipo,
-        concepto,
-        monto: Number(monto),
-      })
-      .select()
-      .single();
-
-    if (error) {
-      alert("Error al guardar movimiento: " + error.message);
+    if (!Number.isFinite(montoNumero) || montoNumero <= 0) {
+      alert("Ingresá un monto válido mayor a cero.");
       return;
     }
 
-    setMovimientosCaja((prev) => [
-      ...prev,
-      {
-        id: data.id,
-        comercioId: data.comercio_id,
-        cajaId: data.caja_id,
-        ventaId: data.venta_id,
-        fecha: data.fecha,
-        tipo: data.tipo,
-        concepto: data.concepto,
-        monto: Number(data.monto),
-      },
-    ]);
+    const { error } = await supabase.rpc("registrar_movimiento_caja", {
+      p_caja_id: caja.id,
+      p_tipo: tipo,
+      p_concepto: concepto.trim(),
+      p_monto: montoNumero,
+    });
+
+    if (error) {
+      alert("Error al guardar movimiento: " + error.message);
+      await recargarDatos();
+      return;
+    }
 
     setConcepto("");
     setMonto("");
@@ -2536,23 +2913,21 @@ function Caja({
       return;
     }
 
-    if (!saldoFinalReal) {
-      alert("Ingresá el saldo final real.");
+    const saldoFinal = Number(saldoFinalReal.replace(",", "."));
+
+    if (!saldoFinalReal.trim() || !Number.isFinite(saldoFinal) || saldoFinal < 0) {
+      alert("Ingresá un saldo final real válido.");
       return;
     }
 
-    const { error } = await supabase
-      .from("cajas")
-      .update({
-        abierta: false,
-        fecha_cierre: new Date().toISOString(),
-        saldo_final_real: Number(saldoFinalReal),
-      })
-      .eq("id", caja.id)
-      .eq("comercio_id", caja.comercioId);
+    const { error } = await supabase.rpc("cerrar_caja_segura", {
+      p_caja_id: caja.id,
+      p_saldo_final_real: saldoFinal,
+    });
 
     if (error) {
       alert("Error al cerrar caja: " + error.message);
+      await recargarDatos();
       return;
     }
 
@@ -2761,6 +3136,8 @@ function Ventas({
   const [filtroNumeroVenta, setFiltroNumeroVenta] = useState("");
   const [mostrarRegistroRapido, setMostrarRegistroRapido] = useState(false);
   const [guardandoProductoRapido, setGuardandoProductoRapido] = useState(false);
+  const [registrandoVenta, setRegistrandoVenta] = useState(false);
+  const procesandoVentaRef = useRef(false);
   const [nuevoProductoRapido, setNuevoProductoRapido] = useState({
     nombre: "",
     codigo: "",
@@ -3397,6 +3774,8 @@ function Ventas({
   }
 
   async function confirmarVenta() {
+    if (procesandoVentaRef.current || registrandoVenta) return;
+
     if (!comercioActual) {
       alert("No hay comercio asociado.");
       return;
@@ -3431,134 +3810,62 @@ function Ventas({
     }
 
     const clienteEncontrado = clientes.find((c) => c.nombre === cliente);
-
-    const { data: ventaData, error: ventaError } = await supabase
-      .from("ventas")
-      .insert({
-        comercio_id: comercioActual.id,
-        caja_id: caja.id,
-        cliente_id: clienteEncontrado?.id || null,
-        cliente_nombre: cliente,
-        medio_pago: medioPago,
-        total,
-      })
-      .select()
-      .single();
-
-    if (ventaError) {
-      alert("Error al guardar venta: " + ventaError.message);
-      return;
-    }
-
-    const itemsParaInsertar = carrito.map((item) => ({
-      comercio_id: comercioActual.id,
-      venta_id: ventaData.id,
+    const itemsParaRegistrar = carrito.map((item) => ({
       producto_id: item.productoId,
-      nombre_producto: item.nombre,
       cantidad: item.cantidad,
-      precio_unitario: item.precioUnitario,
-      subtotal: item.subtotal,
     }));
 
-    const { error: itemsError } = await supabase
-      .from("venta_items")
-      .insert(itemsParaInsertar);
+    procesandoVentaRef.current = true;
+    setRegistrandoVenta(true);
 
-    if (itemsError) {
-      alert("La venta se creó, pero falló el detalle: " + itemsError.message);
-      return;
-    }
+    try {
+      const { data: resultadoVenta, error: ventaError } = await supabase.rpc(
+        "registrar_venta",
+        {
+          p_comercio_id: comercioActual.id,
+          p_caja_id: caja.id,
+          p_cliente_id: clienteEncontrado?.id || null,
+          p_cliente_nombre: cliente,
+          p_medio_pago: medioPago,
+          p_items: itemsParaRegistrar,
+        },
+      );
 
-    for (const item of carrito) {
-      const productoActual = productos.find((p) => p.id === item.productoId);
-
-      if (!productoActual) continue;
-
-      const nuevoStock = productoActual.stock - item.cantidad;
-
-      const { error: stockError } = await supabase
-        .from("productos")
-        .update({ stock: nuevoStock })
-        .eq("id", item.productoId)
-        .eq("comercio_id", comercioActual.id);
-
-      if (stockError) {
-        alert(
-          "La venta se creó, pero falló la actualización de stock: " +
-            stockError.message,
-        );
+      if (ventaError) {
+        alert("No se pudo registrar la venta: " + ventaError.message);
         return;
       }
-    }
 
-    const { data: movimientoData, error: movimientoError } = await supabase
-      .from("movimientos_caja")
-      .insert({
-        comercio_id: comercioActual.id,
-        caja_id: caja.id,
-        venta_id: ventaData.id,
-        tipo: "Ingreso",
-        concepto: `Venta - ${medioPago}`,
-        monto: total,
-      })
-      .select()
-      .single();
-
-    if (movimientoError) {
-      alert(
-        "La venta se creó, pero falló el movimiento de caja: " +
-          movimientoError.message,
+      const totalRegistrado = Number(
+        (resultadoVenta as { total?: number } | null)?.total ?? total,
       );
-      return;
+      const vueltoRegistrado =
+        medioPago === "Efectivo"
+          ? Math.max(0, montoRecibidoNumero - totalRegistrado)
+          : 0;
+
+      const mensajeFinal =
+        medioPago === "Efectivo"
+          ? `Venta registrada correctamente. Vuelto: ${money(
+              vueltoRegistrado,
+            )}.`
+          : "Venta registrada correctamente.";
+
+      setCarrito([]);
+      setBusquedaRapida("");
+      setMontoRecibido("");
+      setCategoriaSeleccionada("Todos");
+      await recargarDatos();
+      alert(mensajeFinal);
+      enfocarBusquedaRapida();
+    } catch (error) {
+      const mensaje =
+        error instanceof Error ? error.message : "Error inesperado.";
+      alert("No se pudo registrar la venta: " + mensaje);
+    } finally {
+      procesandoVentaRef.current = false;
+      setRegistrandoVenta(false);
     }
-
-    setVentas([
-      ...ventas,
-      {
-        id: ventaData.id,
-        comercioId: ventaData.comercio_id,
-        fecha: ventaData.fecha,
-        clienteId: ventaData.cliente_id || null,
-        cliente: ventaData.cliente_nombre,
-        medioPago: ventaData.medio_pago,
-        total: Number(ventaData.total),
-        cajaId: ventaData.caja_id,
-        estado: "activa",
-        motivoAnulacion: "",
-        anuladaAt: null,
-        anuladaPor: null,
-        items: carrito,
-      },
-    ]);
-
-    setMovimientosCaja((prev) => [
-      ...prev,
-      {
-        id: movimientoData.id,
-        comercioId: movimientoData.comercio_id,
-        cajaId: movimientoData.caja_id,
-        ventaId: movimientoData.venta_id,
-        fecha: movimientoData.fecha,
-        tipo: movimientoData.tipo,
-        concepto: movimientoData.concepto,
-        monto: Number(movimientoData.monto),
-      },
-    ]);
-
-    const mensajeFinal =
-      medioPago === "Efectivo"
-        ? `Venta registrada correctamente. Vuelto: ${money(
-            Math.max(0, diferenciaEfectivo),
-          )}.`
-        : "Venta registrada correctamente.";
-
-    setCarrito([]);
-    setBusquedaRapida("");
-    setMontoRecibido("");
-    setCategoriaSeleccionada("Todos");
-    await recargarDatos();
-    alert(mensajeFinal);
-    enfocarBusquedaRapida();
   }
 
   function iniciarAnulacion(venta: Venta) {
@@ -3889,7 +4196,9 @@ function Ventas({
           </div>
 
           <div className="app-actions" style={styles.actions}>
-            <Button onClick={confirmarVenta}>Confirmar venta</Button>
+            <Button onClick={confirmarVenta} disabled={registrandoVenta}>
+              {registrandoVenta ? "Registrando..." : "Confirmar venta"}
+            </Button>
           </div>
         </Panel>
 
@@ -4182,6 +4491,9 @@ function Ventas({
                         <p style={styles.saleMeta}>
                           {formatDate(venta.fecha)} - {venta.cliente} -{" "}
                           {venta.medioPago}
+                          {venta.registradaPorEmail
+                            ? ` · Vendió: ${venta.registradaPorEmail}`
+                            : ""}
                         </p>
                       </div>
 
@@ -5194,32 +5506,112 @@ function Reportes({
         subtitle="Ventas, stock, margen, gastos y flujo de caja."
       />
 
-      <div className="app-cards-grid" style={styles.cardsGrid}>
-        <Card title="Ventas totales" value={money(ventasDelDia)} />
-        <Card title="Ticket promedio" value={money(ticketPromedio)} />
-        <Card title="Margen bruto" value={money(margenBruto)} />
-        <Card title="Resultado estimado" value={money(resultadoEstimado)} />
-      </div>
+      <ReportMetricGroup
+        title="Ventas"
+        subtitle="Los indicadores principales para entender el nivel de actividad comercial."
+      >
+        <div className="app-report-metrics" style={styles.reportMetricsGrid}>
+          <Card
+            title="Ventas totales"
+            value={money(ventasDelDia)}
+            description="Suma de todas las ventas activas registradas."
+            tone="blue"
+            featured
+          />
+          <Card
+            title="Ticket promedio"
+            value={money(ticketPromedio)}
+            description="Importe promedio gastado en cada operación."
+            tone="purple"
+            featured
+          />
+          <Card
+            title="Ventas últimos 7 días"
+            value={money(totalUltimos7Dias)}
+            description="Total de los últimos siete días registrados con ventas."
+            tone="cyan"
+            featured
+          />
+        </div>
+      </ReportMetricGroup>
 
-      <div className="app-cards-grid" style={styles.cardsGrid}>
-        <Card title="Ventas últimos 7 días" value={money(totalUltimos7Dias)} />
-        <Card title="Promedio diario" value={money(promedioDiario)} />
-        <Card title="Gastos cargados" value={money(totalGastos)} />
-        <Card title="Mejor día" value={mejorDia.fecha} />
-      </div>
+      <ReportMetricGroup
+        title="Rentabilidad"
+        subtitle="Estimaciones para observar costos, gastos y resultado del negocio."
+      >
+        <div className="app-report-metrics" style={styles.reportMetricsGrid}>
+          <Card
+            title="Margen bruto"
+            value={money(margenBruto)}
+            description="Ventas menos el costo estimado de la mercadería vendida."
+            tone="orange"
+          />
+          <Card
+            title="Resultado estimado"
+            value={money(resultadoEstimado)}
+            description="Margen bruto menos los gastos registrados."
+            tone={resultadoEstimado >= 0 ? "green" : "red"}
+          />
+          <Card
+            title="Gastos cargados"
+            value={money(totalGastos)}
+            description="Suma de los gastos ingresados en el sistema."
+            tone="red"
+          />
+        </div>
+      </ReportMetricGroup>
 
-      <div className="app-cards-grid" style={styles.cardsGrid}>
-        <Card
-          title="Clientes con compras"
-          value={String(clientesRanking.length)}
-        />
-        <Card
-          title="Ventas identificadas"
-          value={String(ventasIdentificadas)}
-        />
-        <Card title="Consumidor final" value={String(ventasConsumidorFinal)} />
-        <Card title="Clientes registrados" value={String(clientes.length)} />
-      </div>
+      <ReportMetricGroup
+        title="Actividad"
+        subtitle="Datos para reconocer los momentos y tipos de venta más frecuentes."
+      >
+        <div className="app-report-metrics" style={styles.reportMetricsGrid}>
+          <Card
+            title="Promedio diario"
+            value={money(promedioDiario)}
+            description="Promedio vendido por cada día con actividad."
+            tone="blue"
+          />
+          <Card
+            title="Mejor día"
+            value={mejorDia.fecha}
+            description="Fecha con la mayor facturación registrada."
+            tone="green"
+          />
+          <Card
+            title="Consumidor final"
+            value={String(ventasConsumidorFinal)}
+            description="Ventas realizadas sin asociar un cliente registrado."
+            tone="neutral"
+          />
+        </div>
+      </ReportMetricGroup>
+
+      <ReportMetricGroup
+        title="Clientes"
+        subtitle="Información para conocer cuánto se identifica y fideliza a los compradores."
+      >
+        <div className="app-report-metrics" style={styles.reportMetricsGrid}>
+          <Card
+            title="Clientes con compras"
+            value={String(clientesRanking.length)}
+            description="Clientes registrados que tienen al menos una compra."
+            tone="purple"
+          />
+          <Card
+            title="Ventas identificadas"
+            value={String(ventasIdentificadas)}
+            description="Operaciones asociadas a un cliente del comercio."
+            tone="cyan"
+          />
+          <Card
+            title="Clientes registrados"
+            value={String(clientes.length)}
+            description="Cantidad total de clientes guardados."
+            tone="orange"
+          />
+        </div>
+      </ReportMetricGroup>
 
       <div className="app-two-columns" style={styles.twoColumns}>
         <Panel title="Ventas diarias">
@@ -5464,12 +5856,120 @@ function Header({
   );
 }
 
-function Card({ title, value }: { title: string; value: string }) {
+function Card({
+  title,
+  value,
+  description,
+  tone = "neutral",
+  featured = false,
+}: {
+  title: string;
+  value: string;
+  description?: string;
+  tone?: "neutral" | "red" | "blue" | "green" | "orange" | "purple" | "cyan";
+  featured?: boolean;
+}) {
+  const tonos = {
+    neutral: {
+      background: "linear-gradient(145deg, #ffffff, #f8fafc)",
+      border: "#dbe3ee",
+      accent: "#475569",
+      glow: "rgba(71,85,105,0.08)",
+    },
+    red: {
+      background: "linear-gradient(145deg, #ffffff, #fff1f2)",
+      border: "#fecdd3",
+      accent: "#dc2626",
+      glow: "rgba(220,38,38,0.12)",
+    },
+    blue: {
+      background: "linear-gradient(145deg, #ffffff, #eff6ff)",
+      border: "#bfdbfe",
+      accent: "#2563eb",
+      glow: "rgba(37,99,235,0.12)",
+    },
+    green: {
+      background: "linear-gradient(145deg, #ffffff, #ecfdf5)",
+      border: "#a7f3d0",
+      accent: "#059669",
+      glow: "rgba(5,150,105,0.12)",
+    },
+    orange: {
+      background: "linear-gradient(145deg, #ffffff, #fff7ed)",
+      border: "#fed7aa",
+      accent: "#ea580c",
+      glow: "rgba(234,88,12,0.12)",
+    },
+    purple: {
+      background: "linear-gradient(145deg, #ffffff, #f5f3ff)",
+      border: "#ddd6fe",
+      accent: "#7c3aed",
+      glow: "rgba(124,58,237,0.12)",
+    },
+    cyan: {
+      background: "linear-gradient(145deg, #ffffff, #ecfeff)",
+      border: "#a5f3fc",
+      accent: "#0891b2",
+      glow: "rgba(8,145,178,0.12)",
+    },
+  } as const;
+
+  const apariencia = tonos[tone];
+
   return (
-    <div style={styles.card}>
-      <p style={styles.cardTitle}>{title}</p>
+    <div
+      className={`app-metric-card ${featured ? "featured" : ""}`}
+      style={{
+        ...styles.card,
+        minHeight: featured ? 162 : description ? 142 : 108,
+        background: apariencia.background,
+        borderColor: apariencia.border,
+        boxShadow: featured
+          ? `0 18px 44px ${apariencia.glow}`
+          : `0 12px 30px ${apariencia.glow}`,
+      }}
+    >
+      <span
+        style={{
+          ...styles.cardHex,
+          color: apariencia.accent,
+          borderColor: apariencia.border,
+        }}
+        aria-hidden="true"
+      >
+        ⬡
+      </span>
+      <p style={{ ...styles.cardTitle, color: apariencia.accent }}>{title}</p>
       <p style={styles.cardValue}>{value}</p>
+      {description ? (
+        <p style={styles.cardDescription}>{description}</p>
+      ) : null}
     </div>
+  );
+}
+
+function ReportMetricGroup({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section style={styles.reportGroup}>
+      <div style={styles.reportGroupHeader}>
+        <span style={styles.reportGroupMarker} aria-hidden="true">
+          ⬡
+        </span>
+        <div>
+          <h3 style={styles.reportGroupTitle}>{title}</h3>
+          <p style={styles.reportGroupSubtitle}>{subtitle}</p>
+        </div>
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -5529,12 +6029,24 @@ function Input({
 function Button({
   children,
   onClick,
+  disabled = false,
 }: {
   children: React.ReactNode;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
-    <button className="app-primary-button" onClick={onClick} style={styles.button}>
+    <button
+      className="app-primary-button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-disabled={disabled}
+      style={{
+        ...styles.button,
+        opacity: disabled ? 0.65 : 1,
+        cursor: disabled ? "not-allowed" : "pointer",
+      }}
+    >
       {children}
     </button>
   );
@@ -5649,12 +6161,89 @@ function ResponsiveStyles() {
         -webkit-overflow-scrolling: touch;
       }
 
+      @keyframes alertCriticalPulse {
+        0%, 100% {
+          transform: translateZ(0) scale(1);
+          box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.46), 0 12px 30px rgba(185, 28, 28, 0.30);
+        }
+        50% {
+          transform: translateZ(0) scale(1.035);
+          box-shadow: 0 0 0 11px rgba(239, 68, 68, 0), 0 16px 38px rgba(185, 28, 28, 0.42);
+        }
+      }
+
+      @keyframes alertWarningPulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.025); }
+      }
+
+      @keyframes syncGlow {
+        0%, 100% { opacity: 0.72; }
+        50% { opacity: 1; }
+      }
+
+      .app-alert-button.is-critical:not(.is-reviewed) {
+        animation: alertCriticalPulse 1.55s ease-in-out infinite;
+      }
+
+      .app-alert-button.is-warning:not(.is-reviewed) {
+        animation: alertWarningPulse 2.1s ease-in-out infinite;
+      }
+
+      .app-sync-badge > span {
+        animation: syncGlow 1.7s ease-in-out infinite;
+      }
+
+      .app-sidebar::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(248, 113, 113, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(248, 113, 113, 0.035) 1px, transparent 1px);
+        background-size: 28px 28px;
+        mask-image: linear-gradient(to bottom, rgba(0,0,0,0.82), transparent 88%);
+      }
+
+      .app-nav-item {
+        position: relative;
+      }
+
+      .app-nav-item:hover {
+        transform: translateX(3px);
+        border-color: rgba(248, 113, 113, 0.34) !important;
+        background: rgba(127, 29, 29, 0.16) !important;
+      }
+
+      .app-nav-item.active:hover {
+        background: linear-gradient(90deg, rgba(239,68,68,0.30), rgba(127,29,29,0.12)) !important;
+      }
+
+      .app-metric-card {
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      .app-metric-card:hover {
+        transform: translateY(-3px);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .app-alert-button,
+        .app-sync-badge > span,
+        .app-metric-card {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+
       @media (max-width: 1100px) {
         .app-content {
           padding: 26px !important;
         }
 
-        .app-cards-grid {
+        .app-cards-grid,
+        .app-report-metrics {
           grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
         }
 
@@ -5676,6 +6265,8 @@ function ResponsiveStyles() {
 
         .app-sidebar {
           width: 100% !important;
+          min-height: 0 !important;
+          height: auto !important;
           padding: 12px !important;
           position: sticky !important;
           top: 0 !important;
@@ -5700,10 +6291,23 @@ function ResponsiveStyles() {
           font-size: 9px !important;
         }
 
-        .app-sidebar-header > div {
-          margin-top: 7px !important;
-          padding: 4px 8px !important;
-          font-size: 10px !important;
+        .app-sidebar-header {
+          display: grid !important;
+          grid-template-columns: 48px minmax(0, 1fr) !important;
+          column-gap: 10px !important;
+          align-items: center !important;
+        }
+
+        .app-sidebar-header > div:first-child {
+          grid-column: 1 !important;
+          grid-row: 1 / span 3 !important;
+          margin-bottom: 0 !important;
+        }
+
+        .app-sidebar-header h1,
+        .app-sidebar-header p,
+        .app-sidebar-header > div:last-child {
+          grid-column: 2 !important;
         }
 
         .app-mobile-menu-button {
@@ -5788,6 +6392,8 @@ function ResponsiveStyles() {
         }
 
         .app-cards-grid,
+        .app-cards-grid-three,
+        .app-report-metrics,
         .app-two-columns,
         .app-form-grid,
         .app-form-grid-small,
@@ -5974,7 +6580,7 @@ const styles: Record<string, React.CSSProperties> = {
   main: {
     minHeight: "100vh",
     background:
-      "radial-gradient(circle at top left, rgba(220,38,38,0.30), transparent 30%), radial-gradient(circle at bottom right, rgba(127,29,29,0.34), transparent 32%), linear-gradient(135deg, #fff7f7 0%, #f8fafc 52%, #fee2e2 100%)",
+      "radial-gradient(circle at 88% 8%, rgba(239,68,68,0.10), transparent 24%), radial-gradient(circle at 18% 84%, rgba(59,130,246,0.08), transparent 26%), linear-gradient(135deg, #f7f9fc 0%, #eef3f9 52%, #f8fafc 100%)",
     fontFamily:
       'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
@@ -6018,37 +6624,92 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: "100vh",
   },
   sidebar: {
-    width: 292,
+    width: 286,
+    minHeight: "100vh",
+    height: "100vh",
+    position: "sticky",
+    top: 0,
     background:
-      "linear-gradient(180deg, #020617 0%, #111827 42%, #3f0505 100%)",
+      "linear-gradient(180deg, #050914 0%, #08101f 48%, #030711 100%)",
     color: "white",
-    padding: 24,
+    padding: 20,
     flexShrink: 0,
-    boxShadow: "14px 0 42px rgba(15, 23, 42, 0.22)",
-    borderRight: "1px solid rgba(248, 113, 113, 0.18)",
-    position: "relative",
-    overflow: "hidden",
+    boxShadow: "18px 0 46px rgba(2, 6, 23, 0.24)",
+    borderRight: "1px solid rgba(248, 113, 113, 0.24)",
+    overflow: "hidden auto",
   },
   sidebarGlow: {
     position: "absolute",
-    width: 180,
-    height: 180,
-    right: -70,
-    top: -40,
+    width: 220,
+    height: 220,
+    right: -105,
+    top: -82,
     background:
-      "radial-gradient(circle, rgba(220,38,38,0.58), transparent 64%)",
+      "radial-gradient(circle, rgba(239,68,68,0.48), transparent 66%)",
     pointerEvents: "none",
+  },
+  sidebarGridOverlay: {
+    position: "absolute",
+    inset: 0,
+    pointerEvents: "none",
+    background:
+      "linear-gradient(180deg, rgba(239,68,68,0.05), transparent 26%, transparent 76%, rgba(239,68,68,0.05))",
+  },
+  sidebarNeonRail: {
+    position: "absolute",
+    top: 110,
+    bottom: 90,
+    left: 0,
+    width: 3,
+    background: "linear-gradient(180deg, transparent, #ef4444 20%, #991b1b 80%, transparent)",
+    boxShadow: "0 0 18px rgba(239,68,68,0.75)",
+    opacity: 0.9,
+  },
+  sidebarEmblem: {
+    width: 66,
+    height: 66,
+    borderRadius: 20,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 13,
+    background: "radial-gradient(circle, rgba(239,68,68,0.22), rgba(127,29,29,0.08))",
+    border: "1px solid rgba(248,113,113,0.48)",
+    boxShadow: "0 0 28px rgba(239,68,68,0.28), inset 0 0 18px rgba(239,68,68,0.12)",
+    transform: "rotate(45deg)",
+  },
+  sidebarEmblemCore: {
+    color: "#ff4d5f",
+    fontSize: 37,
+    lineHeight: 1,
+    textShadow: "0 0 16px rgba(239,68,68,0.88)",
+    transform: "rotate(-45deg)",
+  },
+  sidebarSystemTag: {
+    marginTop: 10,
+    color: "#ef4444",
+    fontSize: 10,
+    fontWeight: 950,
+    letterSpacing: "0.14em",
   },
   sidebarHeaderBox: {
     position: "relative",
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(248, 113, 113, 0.22)",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    textAlign: "center",
+    background:
+      "linear-gradient(145deg, rgba(15,23,42,0.96), rgba(3,7,18,0.90))",
+    border: "1px solid rgba(248, 113, 113, 0.34)",
     borderRadius: 22,
-    padding: 18,
-    boxShadow: "0 18px 42px rgba(0,0,0,0.24)",
+    padding: "22px 18px 18px",
+    boxShadow:
+      "inset 0 0 28px rgba(239,68,68,0.05), 0 18px 42px rgba(0,0,0,0.32)",
+    clipPath:
+      "polygon(9% 0, 91% 0, 100% 10%, 100% 90%, 91% 100%, 9% 100%, 0 90%, 0 10%)",
   },
   logoKicker: {
-    color: "#fca5a5",
+    color: "#94a3b8",
     textTransform: "uppercase",
     letterSpacing: "0.12em",
     fontSize: 11,
@@ -6070,7 +6731,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   rolePill: {
     display: "inline-block",
-    marginTop: 12,
+    marginTop: 0,
     background: "rgba(239, 68, 68, 0.18)",
     color: "#fecaca",
     border: "1px solid rgba(248, 113, 113, 0.34)",
@@ -6081,13 +6742,20 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sidebarEmail: {
     position: "relative",
-    color: "#cbd5e1",
-    fontSize: 12,
-    marginTop: 14,
+    color: "#94a3b8",
+    fontSize: 11,
+    margin: "9px 0 0",
     wordBreak: "break-word",
   },
+  sidebarIdentity: {
+    marginTop: 20,
+    padding: 13,
+    borderRadius: 15,
+    background: "rgba(15,23,42,0.64)",
+    border: "1px solid rgba(148,163,184,0.12)",
+  },
   navGroupTitle: {
-    color: "#fca5a5",
+    color: "#64748b",
     fontSize: 11,
     fontWeight: 950,
     textTransform: "uppercase",
@@ -6095,7 +6763,7 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 0 8px 4px",
   },
   navIcon: {
-    width: 25,
+    width: 28,
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
@@ -6108,18 +6776,18 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     border: "1px solid transparent",
     textAlign: "left",
-    padding: "13px 14px",
-    borderRadius: 16,
-    marginBottom: 8,
+    padding: "12px 14px",
+    borderRadius: 14,
+    marginBottom: 7,
     cursor: "pointer",
     fontSize: 15,
     fontWeight: 850,
     transition: "all 0.18s ease",
   },
   logoutButton: {
-    marginTop: 22,
+    marginTop: 14,
     width: "100%",
-    background: "rgba(127, 29, 29, 0.56)",
+    background: "linear-gradient(135deg, rgba(127,29,29,0.62), rgba(69,10,10,0.72))",
     color: "white",
     border: "1px solid rgba(248, 113, 113, 0.24)",
     padding: "12px",
@@ -6129,7 +6797,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   content: {
     flex: 1,
-    padding: 36,
+    padding: "34px 38px 48px",
     overflow: "auto",
   },
   header: {
@@ -6156,21 +6824,27 @@ const styles: Record<string, React.CSSProperties> = {
   cardsGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-    gap: 18,
+    gap: 16,
+    marginBottom: 20,
+  },
+  cardsGridThree: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: 16,
     marginBottom: 24,
   },
   card: {
-    background: "rgba(255,255,255,0.96)",
-    padding: 22,
-    borderRadius: 26,
-    boxShadow: "0 16px 42px rgba(127, 29, 29, 0.09)",
-    border: "1px solid rgba(254, 202, 202, 0.96)",
-    minHeight: 98,
+    background: "#ffffff",
+    padding: 20,
+    borderRadius: 20,
+    boxShadow: "0 12px 30px rgba(15, 23, 42, 0.07)",
+    border: "1px solid #dbe3ee",
+    minHeight: 108,
     position: "relative",
     overflow: "hidden",
   },
   cardTitle: {
-    color: "#7f1d1d",
+    color: "#475569",
     fontSize: 12,
     margin: 0,
     fontWeight: 950,
@@ -6179,18 +6853,101 @@ const styles: Record<string, React.CSSProperties> = {
   },
   cardValue: {
     color: "#0f172a",
-    fontSize: 26,
+    fontSize: 27,
     fontWeight: 950,
     margin: "12px 0 0",
     wordBreak: "break-word",
     letterSpacing: "-0.045em",
     lineHeight: 1.15,
   },
+  cardDescription: {
+    margin: "10px 34px 0 0",
+    color: "#64748b",
+    fontSize: 12,
+    lineHeight: 1.45,
+  },
+  cardHex: {
+    position: "absolute",
+    top: 14,
+    right: 14,
+    width: 31,
+    height: 31,
+    border: "1px solid",
+    borderRadius: 10,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 17,
+    background: "rgba(255,255,255,0.72)",
+  },
+  reportGroup: {
+    marginBottom: 24,
+    padding: 18,
+    borderRadius: 22,
+    background: "rgba(255,255,255,0.68)",
+    border: "1px solid rgba(203,213,225,0.82)",
+    boxShadow: "0 10px 30px rgba(15,23,42,0.045)",
+  },
+  reportGroupHeader: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 12,
+    marginBottom: 15,
+  },
+  reportGroupMarker: {
+    width: 36,
+    height: 36,
+    flexShrink: 0,
+    borderRadius: 11,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "#ef4444",
+    background: "#fff1f2",
+    border: "1px solid #fecdd3",
+    boxShadow: "0 7px 18px rgba(220,38,38,0.10)",
+  },
+  reportGroupTitle: {
+    margin: 0,
+    color: "#0f172a",
+    fontSize: 18,
+    fontWeight: 950,
+    letterSpacing: "-0.03em",
+  },
+  reportGroupSubtitle: {
+    margin: "5px 0 0",
+    color: "#64748b",
+    fontSize: 13,
+    lineHeight: 1.45,
+  },
+  reportMetricsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: 14,
+  },
   twoColumns: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
     gap: 18,
     marginBottom: 24,
+  },
+  syncBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "9px 12px",
+    border: "1px solid",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 900,
+    whiteSpace: "nowrap",
+  },
+  syncDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    background: "currentColor",
+    boxShadow: "0 0 10px currentColor",
   },
   alertBellButton: {
     display: "inline-flex",
@@ -6200,7 +6957,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 999,
     padding: "10px 14px",
     background: "rgba(255,255,255,0.96)",
-    color: "#7f1d1d",
+    color: "#475569",
     fontWeight: 950,
     cursor: "pointer",
     boxShadow: "0 10px 24px rgba(127, 29, 29, 0.12)",
@@ -6218,11 +6975,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 950,
   },
   alertsPanel: {
-    background: "rgba(255,255,255,0.97)",
-    padding: 24,
-    borderRadius: 26,
-    boxShadow: "0 16px 42px rgba(127, 29, 29, 0.09)",
-    border: "1px solid rgba(254, 202, 202, 0.96)",
+    background: "rgba(255,255,255,0.98)",
+    padding: 22,
+    borderRadius: 22,
+    boxShadow: "0 16px 42px rgba(15, 23, 42, 0.08)",
+    border: "1px solid #dbe3ee",
     marginBottom: 24,
   },
   alertsHeader: {
@@ -6272,6 +7029,13 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     minWidth: 0,
   },
+  alertSeverityLabel: {
+    display: "block",
+    marginBottom: 4,
+    fontSize: 10,
+    fontWeight: 950,
+    letterSpacing: "0.10em",
+  },
   alertTitle: {
     display: "block",
     fontSize: 15,
@@ -6284,11 +7048,11 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.5,
   },
   panel: {
-    background: "rgba(255,255,255,0.97)",
-    padding: 26,
-    borderRadius: 26,
-    boxShadow: "0 16px 42px rgba(127, 29, 29, 0.09)",
-    border: "1px solid rgba(254, 202, 202, 0.96)",
+    background: "rgba(255,255,255,0.98)",
+    padding: 24,
+    borderRadius: 22,
+    boxShadow: "0 14px 36px rgba(15, 23, 42, 0.07)",
+    border: "1px solid #dbe3ee",
     marginBottom: 24,
   },
   panelTitle: {
@@ -6315,8 +7079,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#64748b",
     margin: 0,
     fontSize: 15,
-    background: "#fff7f7",
-    border: "1px dashed #fca5a5",
+    background: "#f8fafc",
+    border: "1px dashed #cbd5e1",
     borderRadius: 16,
     padding: "14px 16px",
   },
@@ -6326,7 +7090,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: 16,
     padding: "13px 0",
-    borderBottom: "1px solid #fee2e2",
+    borderBottom: "1px solid #e8edf4",
     color: "#0f172a",
     fontSize: 14,
   },
@@ -6342,7 +7106,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
   },
   input: {
-    border: "1px solid #fecaca",
+    border: "1px solid #cbd5e1",
     borderRadius: 15,
     padding: "12px 14px",
     fontSize: 14,
@@ -6351,7 +7115,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#ffffff",
     color: "#0f172a",
     outline: "none",
-    boxShadow: "0 1px 2px rgba(127, 29, 29, 0.05)",
+    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
   },
   actions: {
     display: "flex",
@@ -6389,10 +7153,10 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#7f1d1d",
   },
   tableWrapper: {
-    background: "rgba(255,255,255,0.98)",
-    borderRadius: 26,
-    boxShadow: "0 16px 42px rgba(127, 29, 29, 0.09)",
-    border: "1px solid rgba(254, 202, 202, 0.96)",
+    background: "rgba(255,255,255,0.99)",
+    borderRadius: 22,
+    boxShadow: "0 14px 36px rgba(15, 23, 42, 0.07)",
+    border: "1px solid #dbe3ee",
     overflow: "auto",
   },
   table: {
@@ -6400,10 +7164,10 @@ const styles: Record<string, React.CSSProperties> = {
     borderCollapse: "collapse",
   },
   thead: {
-    background: "#fff7f7",
+    background: "#f8fafc",
   },
   tr: {
-    borderTop: "1px solid #fee2e2",
+    borderTop: "1px solid #e8edf4",
   },
   th: {
     textAlign: "left",

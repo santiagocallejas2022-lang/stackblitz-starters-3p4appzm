@@ -3120,7 +3120,7 @@ function Ventas({
   const busquedaRapidaRef = useRef<HTMLInputElement | null>(null);
   const lectorBufferRef = useRef("");
   const lectorUltimaTeclaRef = useRef(0);
-  const lectorReinicioRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lectorReinicioRef = useRef<number | null>(null);
   const procesarBusquedaRapidaRef = useRef<(valor: string) => void>(() => {});
   const lectorDeshabilitadoRef = useRef(false);
   const [ventaAnulando, setVentaAnulando] = useState<Venta | null>(null);

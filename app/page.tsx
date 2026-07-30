@@ -3118,6 +3118,11 @@ function Ventas({
   const [medioPago, setMedioPago] = useState("Efectivo");
   const [montoRecibido, setMontoRecibido] = useState("");
   const busquedaRapidaRef = useRef<HTMLInputElement | null>(null);
+  const lectorBufferRef = useRef("");
+  const lectorUltimaTeclaRef = useRef(0);
+  const lectorReinicioRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const procesarBusquedaRapidaRef = useRef<(valor: string) => void>(() => {});
+  const lectorDeshabilitadoRef = useRef(false);
   const [ventaAnulando, setVentaAnulando] = useState<Venta | null>(null);
   const [motivoAnulacion, setMotivoAnulacion] = useState("");
   const [anulandoVenta, setAnulandoVenta] = useState(false);
@@ -3147,6 +3152,9 @@ function Ventas({
     stock: "",
     minimo: "",
   });
+
+  lectorDeshabilitadoRef.current =
+    mostrarRegistroRapido || Boolean(ventaAnulando);
 
   const total = carrito.reduce((acc, item) => acc + item.subtotal, 0);
   const montoRecibidoNumero = Number(montoRecibido.replace(",", ".")) || 0;
@@ -3692,19 +3700,25 @@ function Ventas({
     enfocarBusquedaRapida();
   }
 
-  function manejarBusquedaRapida(
-    event: React.KeyboardEvent<HTMLInputElement>,
-  ) {
-    if (event.key !== "Enter") return;
-
-    event.preventDefault();
-
-    const termino = busquedaRapida.trim().toLowerCase();
+  function procesarBusquedaRapida(valorOriginal: string) {
+    const termino = valorOriginal.trim().toLowerCase();
 
     if (!termino) {
       enfocarBusquedaRapida();
       return;
     }
+
+    const productosCoincidentes = productosActivos.filter((producto) => {
+      const coincideCategoria =
+        categoriaSeleccionada === "Todos" ||
+        producto.categoria === categoriaSeleccionada;
+      const coincideBusqueda =
+        producto.nombre.toLowerCase().includes(termino) ||
+        producto.categoria.toLowerCase().includes(termino) ||
+        producto.codigo.toLowerCase().includes(termino);
+
+      return coincideCategoria && coincideBusqueda;
+    });
 
     const productoPorCodigo = productosActivos.find(
       (producto) => producto.codigo.trim().toLowerCase() === termino,
@@ -3722,7 +3736,7 @@ function Ventas({
       return;
     }
 
-    const productoExacto = productosFiltrados.find(
+    const productoExacto = productosCoincidentes.find(
       (producto) => producto.nombre.toLowerCase() === termino,
     );
 
@@ -3738,8 +3752,8 @@ function Ventas({
       return;
     }
 
-    if (productosFiltrados.length === 1) {
-      const agregado = agregarProductoRapido(productosFiltrados[0]);
+    if (productosCoincidentes.length === 1) {
+      const agregado = agregarProductoRapido(productosCoincidentes[0]);
 
       if (agregado) {
         limpiarBusquedaDespuesDeAgregar();
@@ -3750,7 +3764,7 @@ function Ventas({
       return;
     }
 
-    if (productosFiltrados.length === 0) {
+    if (productosCoincidentes.length === 0) {
       const productoInactivo = productos.find(
         (producto) =>
           producto.codigo.trim().toLowerCase() === termino && !producto.activo,
@@ -3765,13 +3779,108 @@ function Ventas({
         return;
       }
 
-      abrirRegistroRapidoProducto(busquedaRapida);
+      abrirRegistroRapidoProducto(valorOriginal);
       return;
     }
 
     alert("Hay varios resultados. Tocá el producto que querés agregar.");
     enfocarBusquedaRapida();
   }
+
+  procesarBusquedaRapidaRef.current = procesarBusquedaRapida;
+
+  function manejarBusquedaRapida(
+    event: React.KeyboardEvent<HTMLInputElement>,
+  ) {
+    if (event.key !== "Enter") return;
+
+    event.preventDefault();
+    procesarBusquedaRapida(busquedaRapida);
+  }
+
+  useEffect(() => {
+    const focoInicial = window.setTimeout(() => {
+      busquedaRapidaRef.current?.focus();
+    }, 100);
+
+    function limpiarBufferLector() {
+      lectorBufferRef.current = "";
+      lectorUltimaTeclaRef.current = 0;
+
+      if (lectorReinicioRef.current) {
+        window.clearTimeout(lectorReinicioRef.current);
+        lectorReinicioRef.current = null;
+      }
+    }
+
+    function manejarLectorGlobal(event: KeyboardEvent) {
+      const objetivo = event.target as HTMLElement | null;
+      const esCampoEditable =
+        objetivo instanceof HTMLInputElement ||
+        objetivo instanceof HTMLTextAreaElement ||
+        objetivo instanceof HTMLSelectElement ||
+        Boolean(objetivo?.isContentEditable);
+
+      if (objetivo === busquedaRapidaRef.current) {
+        limpiarBufferLector();
+        return;
+      }
+
+      if (
+        lectorDeshabilitadoRef.current ||
+        esCampoEditable ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey
+      ) {
+        limpiarBufferLector();
+        return;
+      }
+
+      if (event.key === "Enter") {
+        const codigo = lectorBufferRef.current.trim();
+        limpiarBufferLector();
+
+        if (codigo.length < 6) return;
+
+        event.preventDefault();
+        setBusquedaRapida(codigo);
+        procesarBusquedaRapidaRef.current(codigo);
+        return;
+      }
+
+      if (event.key.length !== 1) return;
+
+      const ahora = Date.now();
+
+      if (
+        lectorUltimaTeclaRef.current > 0 &&
+        ahora - lectorUltimaTeclaRef.current > 120
+      ) {
+        lectorBufferRef.current = "";
+      }
+
+      lectorBufferRef.current += event.key;
+      lectorUltimaTeclaRef.current = ahora;
+
+      if (lectorReinicioRef.current) {
+        window.clearTimeout(lectorReinicioRef.current);
+      }
+
+      lectorReinicioRef.current = window.setTimeout(
+        limpiarBufferLector,
+        300,
+      );
+    }
+
+    window.addEventListener("keydown", manejarLectorGlobal, true);
+
+    return () => {
+      window.clearTimeout(focoInicial);
+      limpiarBufferLector();
+      window.removeEventListener("keydown", manejarLectorGlobal, true);
+    };
+  }, []);
 
   async function confirmarVenta() {
     if (procesandoVentaRef.current || registrandoVenta) return;
@@ -3987,7 +4096,10 @@ function Ventas({
                 <button
                   key={categoria}
                   type="button"
-                  onClick={() => setCategoriaSeleccionada(categoria)}
+                  onClick={() => {
+                        setCategoriaSeleccionada(categoria);
+                        enfocarBusquedaRapida();
+                      }}
                   style={{
                     ...styles.categoryTab,
                     ...(activa ? styles.categoryTabActive : {}),
@@ -4011,7 +4123,10 @@ function Ventas({
                   <button
                     key={`acceso-${producto.id}`}
                     type="button"
-                    onClick={() => agregarProductoRapido(producto)}
+                    onClick={() => {
+                      agregarProductoRapido(producto);
+                      enfocarBusquedaRapida();
+                    }}
                     disabled={producto.stock <= 0}
                     style={{
                       ...styles.quickAccessButton,
@@ -4038,7 +4153,10 @@ function Ventas({
                     key={producto.id}
                     type="button"
                     className="app-quick-product-card"
-                    onClick={() => agregarProductoRapido(producto)}
+                    onClick={() => {
+                      agregarProductoRapido(producto);
+                      enfocarBusquedaRapida();
+                    }}
                     disabled={sinStock}
                     style={{
                       ...styles.quickProductCard,

@@ -24,6 +24,93 @@ type Comercio = {
   estado?: string;
 };
 
+type MiembroEquipo = {
+  relacionId: number;
+  userId: string;
+  email: string;
+  rol: string;
+  estado: string;
+  accesoTotal: boolean;
+  permisos: Record<string, boolean>;
+  fechaAsociacion: string;
+  ultimoAcceso: string | null;
+  updatedAt: string;
+};
+
+type InvitacionComercio = {
+  id: number;
+  comercioId: number;
+  email: string;
+  token: string;
+  estado: string;
+  accesoTotal: boolean;
+  permisos: Record<string, boolean>;
+  fechaExpiracion: string;
+  aceptadaAt: string | null;
+  createdAt: string;
+};
+
+type GrupoPermisos = {
+  titulo: string;
+  permisos: { clave: string; etiqueta: string }[];
+};
+
+const GRUPOS_PERMISOS: GrupoPermisos[] = [
+  {
+    titulo: "Ventas",
+    permisos: [
+      { clave: "ventas.ver", etiqueta: "Ver ventas" },
+      { clave: "ventas.crear", etiqueta: "Registrar ventas" },
+      { clave: "ventas.anular", etiqueta: "Anular ventas" },
+    ],
+  },
+  {
+    titulo: "Productos",
+    permisos: [
+      { clave: "productos.ver", etiqueta: "Ver productos" },
+      { clave: "productos.crear", etiqueta: "Crear productos" },
+      { clave: "productos.editar", etiqueta: "Editar productos y precios" },
+      { clave: "productos.eliminar", etiqueta: "Eliminar productos" },
+      { clave: "stock.ingresar", etiqueta: "Ingresar stock" },
+      { clave: "stock.ver_historial", etiqueta: "Ver historial de stock" },
+    ],
+  },
+  {
+    titulo: "Clientes",
+    permisos: [
+      { clave: "clientes.ver", etiqueta: "Ver clientes" },
+      { clave: "clientes.crear", etiqueta: "Crear clientes" },
+      { clave: "clientes.editar", etiqueta: "Editar clientes" },
+      { clave: "clientes.eliminar", etiqueta: "Eliminar clientes" },
+    ],
+  },
+  {
+    titulo: "Caja",
+    permisos: [
+      { clave: "caja.ver", etiqueta: "Ver caja e historial" },
+      { clave: "caja.abrir", etiqueta: "Abrir caja" },
+      { clave: "caja.cerrar", etiqueta: "Cerrar caja" },
+      {
+        clave: "caja.registrar_movimiento",
+        etiqueta: "Registrar ingresos y egresos manuales",
+      },
+    ],
+  },
+  {
+    titulo: "Gastos",
+    permisos: [
+      { clave: "gastos.ver", etiqueta: "Ver gastos" },
+      { clave: "gastos.crear", etiqueta: "Registrar gastos" },
+      { clave: "gastos.editar", etiqueta: "Editar gastos" },
+      { clave: "gastos.eliminar", etiqueta: "Eliminar gastos" },
+    ],
+  },
+  {
+    titulo: "Reportes",
+    permisos: [{ clave: "reportes.ver", etiqueta: "Ver reportes" }],
+  },
+];
+
 type Producto = {
   id: number;
   comercioId: number;
@@ -262,6 +349,18 @@ export default function Home() {
   const [usuario, setUsuario] = useState<any>(null);
   const [comercioActual, setComercioActual] = useState<Comercio | null>(null);
   const [rolUsuario, setRolUsuario] = useState("admin_comercio");
+  const [accesoTotalUsuario, setAccesoTotalUsuario] = useState(false);
+  const [permisosUsuario, setPermisosUsuario] = useState<
+    Record<string, boolean>
+  >({});
+  const [estadoRelacionUsuario, setEstadoRelacionUsuario] = useState("activo");
+  const [tokenInvitacion, setTokenInvitacion] = useState<string | null>(null);
+  const [urlRevisada, setUrlRevisada] = useState(false);
+  const [procesandoInvitacion, setProcesandoInvitacion] = useState(false);
+  const invitacionProcesadaRef = useRef(false);
+  const [modoRegistroInvitado, setModoRegistroInvitado] = useState(false);
+  const [emailInvitado, setEmailInvitado] = useState("");
+  const [passwordInvitado, setPasswordInvitado] = useState("");
   const [cargandoUsuario, setCargandoUsuario] = useState(true);
   const [cargandoDatos, setCargandoDatos] = useState(false);
   const [modoRegistro, setModoRegistro] = useState(false);
@@ -290,6 +389,13 @@ export default function Home() {
   const [inscripcionesCapacitaciones, setInscripcionesCapacitaciones] =
     useState<InscripcionCapacitacion[]>([]);
   const [caja, setCaja] = useState<Caja>(cajaVacia());
+
+  useEffect(() => {
+    const parametros = new URLSearchParams(window.location.search);
+    const token = parametros.get("invitacion");
+    setTokenInvitacion(token);
+    setUrlRevisada(true);
+  }, []);
 
   useEffect(() => {
     async function cargarUsuario() {
@@ -322,10 +428,17 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (usuario) {
+    if (!usuario || !urlRevisada) return;
+
+    if (tokenInvitacion && !invitacionProcesadaRef.current) {
+      aceptarInvitacionPendiente();
+      return;
+    }
+
+    if (!tokenInvitacion) {
       cargarComercioYDatos();
     }
-  }, [usuario]);
+  }, [usuario, tokenInvitacion, urlRevisada]);
 
   useEffect(() => {
     const comercioId = comercioActual?.id;
@@ -470,6 +583,87 @@ export default function Home() {
     };
   }, [usuario?.id, comercioActual?.id]);
 
+  async function iniciarSesionComoInvitado() {
+    if (!emailInvitado.trim() || !passwordInvitado) {
+      alert("Ingresá el correo invitado y la contraseña.");
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: emailInvitado.trim().toLowerCase(),
+      password: passwordInvitado,
+    });
+
+    if (error) {
+      alert("Error al iniciar sesión: " + error.message);
+    }
+  }
+
+  async function registrarseComoInvitado() {
+    if (!emailInvitado.trim() || !passwordInvitado) {
+      alert("Ingresá el correo invitado y una contraseña.");
+      return;
+    }
+
+    if (passwordInvitado.length < 6) {
+      alert("La contraseña debe tener al menos 6 caracteres.");
+      return;
+    }
+
+    const { data, error } = await supabase.auth.signUp({
+      email: emailInvitado.trim().toLowerCase(),
+      password: passwordInvitado,
+      options: {
+        emailRedirectTo: window.location.href,
+      },
+    });
+
+    if (error) {
+      alert("Error al crear la cuenta: " + error.message);
+      return;
+    }
+
+    if (!data.session) {
+      alert(
+        "Cuenta creada. Revisá tu correo para confirmarla y después abrí nuevamente este enlace de invitación.",
+      );
+      return;
+    }
+
+    setUsuario(data.user);
+  }
+
+  async function aceptarInvitacionPendiente() {
+    if (!usuario || !tokenInvitacion || invitacionProcesadaRef.current) return;
+
+    invitacionProcesadaRef.current = true;
+    setProcesandoInvitacion(true);
+
+    const { error } = await supabase.rpc("aceptar_invitacion_comercio", {
+      p_token: tokenInvitacion,
+    });
+
+    if (error) {
+      const mensaje = error.message || "No se pudo aceptar la invitación.";
+      const yaAsociado = mensaje.toLowerCase().includes("ya está asociada");
+
+      if (!yaAsociado) {
+        alert("No se pudo aceptar la invitación: " + mensaje);
+        invitacionProcesadaRef.current = false;
+        setProcesandoInvitacion(false);
+        return;
+      }
+    } else {
+      alert("Invitación aceptada. Ya podés ingresar al comercio.");
+    }
+
+    const urlLimpia = `${window.location.pathname}${window.location.hash || ""}`;
+    window.history.replaceState({}, "", urlLimpia);
+    setTokenInvitacion(null);
+    setProcesandoInvitacion(false);
+    await cargarComercioYDatos();
+  }
+
   async function cargarComercioYDatos() {
     if (!usuario) return;
 
@@ -481,6 +675,9 @@ export default function Home() {
         `
         comercio_id,
         rol,
+        estado,
+        acceso_total,
+        permisos,
         comercios (
           id,
           nombre,
@@ -530,6 +727,9 @@ export default function Home() {
 
     setComercioActual(comercio);
     setRolUsuario(data.rol || "admin_comercio");
+    setEstadoRelacionUsuario(data.estado || "activo");
+    setAccesoTotalUsuario(Boolean(data.acceso_total));
+    setPermisosUsuario(data.permisos || {});
     await cargarDatos(comercio.id, data.rol || "admin_comercio");
     setCargandoDatos(false);
   }
@@ -983,6 +1183,9 @@ export default function Home() {
     setCapacitaciones([]);
     setInscripcionesCapacitaciones([]);
     setRolUsuario("admin_comercio");
+    setEstadoRelacionUsuario("activo");
+    setAccesoTotalUsuario(false);
+    setPermisosUsuario({});
     setCaja(cajaVacia());
   }
 
@@ -1143,6 +1346,60 @@ export default function Home() {
   }
 
   if (!usuario) {
+    if (tokenInvitacion) {
+      return (
+        <main className="app-login-main" style={styles.loginMain}>
+          <ResponsiveStyles />
+          <section className="app-login-box" style={styles.loginBox}>
+            <h1 style={styles.loginTitle}>Invitación a un comercio</h1>
+            <p style={styles.loginText}>
+              Ingresá o creá una cuenta usando exactamente el correo que recibió
+              la invitación. No se creará un comercio nuevo.
+            </p>
+
+            <input
+              style={styles.input}
+              placeholder="Correo invitado"
+              value={emailInvitado}
+              onChange={(e) => setEmailInvitado(e.target.value)}
+            />
+
+            <input
+              style={{ ...styles.input, marginTop: 12 }}
+              placeholder="Contraseña"
+              type="password"
+              value={passwordInvitado}
+              onChange={(e) => setPasswordInvitado(e.target.value)}
+            />
+
+            <div style={{ marginTop: 18 }}>
+              <button
+                style={styles.button}
+                onClick={
+                  modoRegistroInvitado
+                    ? registrarseComoInvitado
+                    : iniciarSesionComoInvitado
+                }
+              >
+                {modoRegistroInvitado
+                  ? "Crear cuenta de empleado"
+                  : "Ingresar y aceptar invitación"}
+              </button>
+            </div>
+
+            <button
+              style={{ ...styles.secondaryButton, marginTop: 12 }}
+              onClick={() => setModoRegistroInvitado((valor) => !valor)}
+            >
+              {modoRegistroInvitado
+                ? "Ya tengo una cuenta"
+                : "Todavía no tengo una cuenta"}
+            </button>
+          </section>
+        </main>
+      );
+    }
+
     return (
       <main className="app-login-main" style={styles.loginMain}>
         <ResponsiveStyles />
@@ -1255,6 +1512,34 @@ export default function Home() {
     );
   }
 
+  if (estadoRelacionUsuario === "suspendido") {
+    return (
+      <main className="app-login-main" style={styles.loginMain}>
+        <ResponsiveStyles />
+        <section className="app-login-box" style={styles.loginBox}>
+          <h1 style={styles.loginTitle}>Acceso suspendido</h1>
+          <p style={styles.loginText}>
+            El administrador del comercio suspendió temporalmente esta cuenta.
+          </p>
+          <button style={styles.button} onClick={cerrarSesion}>
+            Cerrar sesión
+          </button>
+        </section>
+      </main>
+    );
+  }
+
+  if (procesandoInvitacion) {
+    return (
+      <main className="app-main" style={styles.main}>
+        <ResponsiveStyles />
+        <div style={{ padding: 40 }}>
+          <p>Aceptando invitación y vinculando la cuenta...</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="app-main" style={styles.main}>
         <ResponsiveStyles />
@@ -1265,6 +1550,8 @@ export default function Home() {
           emailUsuario={usuario.email}
           comercioActual={comercioActual}
           rolUsuario={rolUsuario}
+          accesoTotalUsuario={accesoTotalUsuario}
+          permisosUsuario={permisosUsuario}
           cerrarSesion={cerrarSesion}
         />
 
@@ -1296,6 +1583,7 @@ export default function Home() {
             <MiComercio
               comercioActual={comercioActual}
               setComercioActual={setComercioActual}
+              rolUsuario={rolUsuario}
             />
           )}
 
@@ -1392,15 +1680,43 @@ export default function Home() {
 function MiComercio({
   comercioActual,
   setComercioActual,
+  rolUsuario,
 }: {
   comercioActual: Comercio | null;
   setComercioActual: React.Dispatch<React.SetStateAction<Comercio | null>>;
+  rolUsuario: string;
 }) {
+  const puedeGestionarEquipo =
+    rolUsuario === "admin_comercio" || rolUsuario === "admin_secretaria";
+
+  const [pestana, setPestana] = useState<"datos" | "equipo">("datos");
   const [nombre, setNombre] = useState(comercioActual?.nombre || "");
   const [rubro, setRubro] = useState(comercioActual?.rubro || "");
   const [direccion, setDireccion] = useState(comercioActual?.direccion || "");
   const [telefono, setTelefono] = useState(comercioActual?.telefono || "");
   const [email, setEmail] = useState(comercioActual?.email || "");
+
+  const [equipo, setEquipo] = useState<MiembroEquipo[]>([]);
+  const [invitaciones, setInvitaciones] = useState<InvitacionComercio[]>([]);
+  const [cargandoEquipo, setCargandoEquipo] = useState(false);
+  const [errorEquipo, setErrorEquipo] = useState("");
+
+  const [mostrarInvitacion, setMostrarInvitacion] = useState(false);
+  const [emailInvitacion, setEmailInvitacion] = useState("");
+  const [accesoTotalInvitacion, setAccesoTotalInvitacion] = useState(false);
+  const [permisosInvitacion, setPermisosInvitacion] = useState<
+    Record<string, boolean>
+  >({});
+  const [creandoInvitacion, setCreandoInvitacion] = useState(false);
+
+  const [miembroEditando, setMiembroEditando] =
+    useState<MiembroEquipo | null>(null);
+  const [estadoEditando, setEstadoEditando] = useState("activo");
+  const [accesoTotalEditando, setAccesoTotalEditando] = useState(false);
+  const [permisosEditando, setPermisosEditando] = useState<
+    Record<string, boolean>
+  >({});
+  const [guardandoPermisos, setGuardandoPermisos] = useState(false);
 
   useEffect(() => {
     setNombre(comercioActual?.nombre || "");
@@ -1410,13 +1726,29 @@ function MiComercio({
     setEmail(comercioActual?.email || "");
   }, [comercioActual]);
 
+  useEffect(() => {
+    if (!puedeGestionarEquipo && pestana === "equipo") {
+      setPestana("datos");
+    }
+  }, [puedeGestionarEquipo, pestana]);
+
+  useEffect(() => {
+    if (
+      pestana === "equipo" &&
+      puedeGestionarEquipo &&
+      comercioActual?.id
+    ) {
+      cargarEquipoCompleto();
+    }
+  }, [pestana, puedeGestionarEquipo, comercioActual?.id]);
+
   async function guardarDatosComercio() {
     if (!comercioActual) {
       alert("No hay comercio asociado.");
       return;
     }
 
-    if (!nombre) {
+    if (!nombre.trim()) {
       alert("El nombre del comercio es obligatorio.");
       return;
     }
@@ -1424,11 +1756,11 @@ function MiComercio({
     const { data, error } = await supabase
       .from("comercios")
       .update({
-        nombre,
-        rubro,
-        direccion,
-        telefono,
-        email,
+        nombre: nombre.trim(),
+        rubro: rubro.trim(),
+        direccion: direccion.trim(),
+        telefono: telefono.trim(),
+        email: email.trim(),
       })
       .eq("id", comercioActual.id)
       .select()
@@ -1452,49 +1784,805 @@ function MiComercio({
     alert("Datos del comercio actualizados.");
   }
 
+  function normalizarMiembro(item: any): MiembroEquipo {
+    return {
+      relacionId: Number(item.relacion_id),
+      userId: item.user_id,
+      email: item.email || "Sin correo",
+      rol: item.rol,
+      estado: item.estado || "activo",
+      accesoTotal: Boolean(item.acceso_total),
+      permisos: item.permisos || {},
+      fechaAsociacion: item.fecha_asociacion,
+      ultimoAcceso: item.ultimo_acceso || null,
+      updatedAt: item.updated_at,
+    };
+  }
+
+  function normalizarInvitacion(item: any): InvitacionComercio {
+    return {
+      id: Number(item.id),
+      comercioId: Number(item.comercio_id),
+      email: item.email || "",
+      token: item.token,
+      estado: item.estado || "pendiente",
+      accesoTotal: Boolean(item.acceso_total),
+      permisos: item.permisos || {},
+      fechaExpiracion: item.fecha_expiracion,
+      aceptadaAt: item.aceptada_at || null,
+      createdAt: item.created_at,
+    };
+  }
+
+  async function cargarEquipoCompleto() {
+    if (!comercioActual) return;
+
+    setCargandoEquipo(true);
+    setErrorEquipo("");
+
+    const [equipoRespuesta, invitacionesRespuesta] = await Promise.all([
+      supabase.rpc("listar_equipo_comercio", {
+        p_comercio_id: comercioActual.id,
+      }),
+      supabase
+        .from("invitaciones_comercios")
+        .select("*")
+        .eq("comercio_id", comercioActual.id)
+        .order("created_at", { ascending: false }),
+    ]);
+
+    if (equipoRespuesta.error) {
+      console.error("Error al cargar equipo:", equipoRespuesta.error);
+      setErrorEquipo(equipoRespuesta.error.message);
+      setEquipo([]);
+      setCargandoEquipo(false);
+      return;
+    }
+
+    if (invitacionesRespuesta.error) {
+      console.error(
+        "Error al cargar invitaciones:",
+        invitacionesRespuesta.error,
+      );
+      setErrorEquipo(invitacionesRespuesta.error.message);
+      setInvitaciones([]);
+      setCargandoEquipo(false);
+      return;
+    }
+
+    setEquipo((equipoRespuesta.data || []).map(normalizarMiembro));
+    setInvitaciones(
+      (invitacionesRespuesta.data || []).map(normalizarInvitacion),
+    );
+    setCargandoEquipo(false);
+  }
+
+  function alternarPermiso(
+    clave: string,
+    permisos: Record<string, boolean>,
+    actualizar: React.Dispatch<
+      React.SetStateAction<Record<string, boolean>>
+    >,
+  ) {
+    actualizar({
+      ...permisos,
+      [clave]: !permisos[clave],
+    });
+  }
+
+  function limpiarFormularioInvitacion() {
+    setEmailInvitacion("");
+    setAccesoTotalInvitacion(false);
+    setPermisosInvitacion({});
+    setMostrarInvitacion(false);
+  }
+
+  async function crearInvitacion() {
+    if (!comercioActual) return;
+
+    const emailNormalizado = emailInvitacion.trim().toLowerCase();
+
+    if (!emailNormalizado || !emailNormalizado.includes("@")) {
+      alert("Ingresá un correo electrónico válido.");
+      return;
+    }
+
+    setCreandoInvitacion(true);
+
+    const { error } = await supabase.rpc("crear_invitacion_comercio", {
+      p_comercio_id: comercioActual.id,
+      p_email: emailNormalizado,
+      p_acceso_total: accesoTotalInvitacion,
+      p_permisos: accesoTotalInvitacion ? {} : permisosInvitacion,
+    });
+
+    setCreandoInvitacion(false);
+
+    if (error) {
+      alert("No se pudo crear la invitación: " + error.message);
+      return;
+    }
+
+    limpiarFormularioInvitacion();
+    await cargarEquipoCompleto();
+    alert(
+      "Invitación creada. Copiá el enlace y envíaselo al empleado.",
+    );
+  }
+
+  function obtenerEnlaceInvitacion(invitacion: InvitacionComercio) {
+    if (typeof window === "undefined") return "";
+
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "";
+    url.searchParams.set("invitacion", invitacion.token);
+    return url.toString();
+  }
+
+  async function copiarEnlaceInvitacion(invitacion: InvitacionComercio) {
+    const enlace = obtenerEnlaceInvitacion(invitacion);
+
+    try {
+      await navigator.clipboard.writeText(enlace);
+      alert("Enlace de invitación copiado.");
+    } catch {
+      window.prompt("Copiá este enlace:", enlace);
+    }
+  }
+
+  function enviarInvitacionPorCorreo(invitacion: InvitacionComercio) {
+    const enlace = obtenerEnlaceInvitacion(invitacion);
+    const asunto = encodeURIComponent("Invitación al sistema de gestión");
+    const cuerpo = encodeURIComponent(
+      `Te invitaron a formar parte de ${comercioActual?.nombre || "un comercio"}.\n\nAbrí este enlace para crear tu cuenta o iniciar sesión:\n${enlace}`,
+    );
+
+    window.location.href = `mailto:${encodeURIComponent(
+      invitacion.email,
+    )}?subject=${asunto}&body=${cuerpo}`;
+  }
+
+  async function cancelarInvitacion(invitacion: InvitacionComercio) {
+    if (!confirm(`¿Cancelar la invitación enviada a ${invitacion.email}?`)) {
+      return;
+    }
+
+    const { error } = await supabase.rpc("cancelar_invitacion_comercio", {
+      p_invitacion_id: invitacion.id,
+    });
+
+    if (error) {
+      alert("No se pudo cancelar la invitación: " + error.message);
+      return;
+    }
+
+    await cargarEquipoCompleto();
+  }
+
+  function abrirEdicionMiembro(miembro: MiembroEquipo) {
+    setMiembroEditando(miembro);
+    setEstadoEditando(miembro.estado);
+    setAccesoTotalEditando(miembro.accesoTotal);
+    setPermisosEditando({ ...miembro.permisos });
+  }
+
+  function cerrarEdicionMiembro() {
+    if (guardandoPermisos) return;
+    setMiembroEditando(null);
+    setEstadoEditando("activo");
+    setAccesoTotalEditando(false);
+    setPermisosEditando({});
+  }
+
+  async function guardarPermisosMiembro() {
+    if (!miembroEditando) return;
+
+    setGuardandoPermisos(true);
+
+    const { error } = await supabase.rpc("actualizar_permisos_empleado", {
+      p_relacion_id: miembroEditando.relacionId,
+      p_estado: estadoEditando,
+      p_acceso_total: accesoTotalEditando,
+      p_permisos: accesoTotalEditando ? {} : permisosEditando,
+    });
+
+    setGuardandoPermisos(false);
+
+    if (error) {
+      alert("No se pudieron actualizar los permisos: " + error.message);
+      return;
+    }
+
+    cerrarEdicionMiembro();
+    await cargarEquipoCompleto();
+    alert("Permisos actualizados.");
+  }
+
+  async function alternarSuspension(miembro: MiembroEquipo) {
+    const nuevoEstado = miembro.estado === "activo" ? "suspendido" : "activo";
+    const accion = nuevoEstado === "suspendido" ? "suspender" : "reactivar";
+
+    if (!confirm(`¿Querés ${accion} el acceso de ${miembro.email}?`)) return;
+
+    const { error } = await supabase.rpc("actualizar_permisos_empleado", {
+      p_relacion_id: miembro.relacionId,
+      p_estado: nuevoEstado,
+      p_acceso_total: miembro.accesoTotal,
+      p_permisos: miembro.permisos,
+    });
+
+    if (error) {
+      alert(`No se pudo ${accion} la cuenta: ` + error.message);
+      return;
+    }
+
+    await cargarEquipoCompleto();
+  }
+
+  async function desvincularMiembro(miembro: MiembroEquipo) {
+    if (
+      !confirm(
+        `¿Desvincular a ${miembro.email}? Su cuenta seguirá existiendo, pero perderá el acceso a este comercio.`,
+      )
+    ) {
+      return;
+    }
+
+    const { error } = await supabase.rpc("desvincular_empleado_comercio", {
+      p_relacion_id: miembro.relacionId,
+    });
+
+    if (error) {
+      alert("No se pudo desvincular al empleado: " + error.message);
+      return;
+    }
+
+    await cargarEquipoCompleto();
+  }
+
+  function SelectorPermisos({
+    accesoTotal,
+    setAccesoTotal,
+    permisos,
+    setPermisos,
+  }: {
+    accesoTotal: boolean;
+    setAccesoTotal: (valor: boolean) => void;
+    permisos: Record<string, boolean>;
+    setPermisos: React.Dispatch<
+      React.SetStateAction<Record<string, boolean>>
+    >;
+  }) {
+    return (
+      <div style={{ display: "grid", gap: 16 }}>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: 14,
+            border: "1px solid #bfdbfe",
+            borderRadius: 12,
+            background: accesoTotal ? "#eff6ff" : "#ffffff",
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={accesoTotal}
+            onChange={(e) => setAccesoTotal(e.target.checked)}
+          />
+          <div>
+            <strong style={{ display: "block", color: "#1e3a8a" }}>
+              Acceso total
+            </strong>
+            <span style={{ fontSize: 13, color: "#64748b" }}>
+              Podrá usar todas las funciones actuales y futuras del comercio.
+            </span>
+          </div>
+        </label>
+
+        {!accesoTotal && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+              gap: 12,
+            }}
+          >
+            {GRUPOS_PERMISOS.map((grupo) => (
+              <div
+                key={grupo.titulo}
+                style={{
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 12,
+                  padding: 14,
+                  background: "#ffffff",
+                }}
+              >
+                <strong
+                  style={{ display: "block", color: "#0f172a", marginBottom: 10 }}
+                >
+                  {grupo.titulo}
+                </strong>
+
+                <div style={{ display: "grid", gap: 9 }}>
+                  {grupo.permisos.map((permiso) => (
+                    <label
+                      key={permiso.clave}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 8,
+                        cursor: "pointer",
+                        fontSize: 14,
+                        color: "#334155",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={Boolean(permisos[permiso.clave])}
+                        onChange={() =>
+                          alternarPermiso(
+                            permiso.clave,
+                            permisos,
+                            setPermisos,
+                          )
+                        }
+                      />
+                      <span>{permiso.etiqueta}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const invitacionesPendientes = invitaciones.filter(
+    (invitacion) => invitacion.estado === "pendiente",
+  );
+
   return (
     <>
       <Header
         title="Mi comercio"
-        subtitle="Datos principales del comercio. Estos datos ayudan a identificar la cuenta y mejorar la gestión."
+        subtitle="Configuración, información principal y personas asociadas al comercio."
       />
 
-      <Panel title="Datos del comercio">
-        <div className="app-form-grid-small" style={styles.formGridSmall}>
-          <Input
-            placeholder="Nombre del comercio"
-            value={nombre}
-            onChange={setNombre}
-          />
-          <Input placeholder="Rubro" value={rubro} onChange={setRubro} />
-          <Input
-            placeholder="Teléfono / WhatsApp"
-            value={telefono}
-            onChange={setTelefono}
-          />
-          <Input
-            placeholder="Dirección"
-            value={direccion}
-            onChange={setDireccion}
-          />
-          <Input
-            placeholder="Email de contacto"
-            value={email}
-            onChange={setEmail}
-          />
-          <Button onClick={guardarDatosComercio}>Guardar datos</Button>
-        </div>
-      </Panel>
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          flexWrap: "wrap",
+          marginBottom: 20,
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setPestana("datos")}
+          style={{
+            padding: "11px 18px",
+            borderRadius: 10,
+            cursor: "pointer",
+            fontWeight: 700,
+            border:
+              pestana === "datos"
+                ? "1px solid #dc2626"
+                : "1px solid #cbd5e1",
+            background:
+              pestana === "datos"
+                ? "linear-gradient(135deg, #ef4444, #b91c1c)"
+                : "#ffffff",
+            color: pestana === "datos" ? "#ffffff" : "#334155",
+          }}
+        >
+          Datos del comercio
+        </button>
 
-      <Panel title="Resumen de cuenta">
-        <Row left="Comercio" right={comercioActual?.nombre || "Sin nombre"} />
-        <Row left="Rubro" right={comercioActual?.rubro || "Sin rubro"} />
-        <Row
-          left="Teléfono"
-          right={comercioActual?.telefono || "Sin teléfono"}
-        />
-        <Row left="Estado" right={comercioActual?.estado || "activo"} />
-      </Panel>
+        {puedeGestionarEquipo && (
+          <button
+            type="button"
+            onClick={() => setPestana("equipo")}
+            style={{
+              padding: "11px 18px",
+              borderRadius: 10,
+              cursor: "pointer",
+              fontWeight: 700,
+              border:
+                pestana === "equipo"
+                  ? "1px solid #dc2626"
+                  : "1px solid #cbd5e1",
+              background:
+                pestana === "equipo"
+                  ? "linear-gradient(135deg, #ef4444, #b91c1c)"
+                  : "#ffffff",
+              color: pestana === "equipo" ? "#ffffff" : "#334155",
+            }}
+          >
+            Equipo y permisos
+          </button>
+        )}
+      </div>
+
+      {pestana === "datos" && (
+        <>
+          <Panel title="Datos del comercio">
+            <div className="app-form-grid-small" style={styles.formGridSmall}>
+              <Input
+                placeholder="Nombre del comercio"
+                value={nombre}
+                onChange={setNombre}
+              />
+              <Input placeholder="Rubro" value={rubro} onChange={setRubro} />
+              <Input
+                placeholder="Teléfono / WhatsApp"
+                value={telefono}
+                onChange={setTelefono}
+              />
+              <Input
+                placeholder="Dirección"
+                value={direccion}
+                onChange={setDireccion}
+              />
+              <Input
+                placeholder="Email de contacto"
+                value={email}
+                onChange={setEmail}
+              />
+              <Button onClick={guardarDatosComercio}>Guardar datos</Button>
+            </div>
+          </Panel>
+
+          <Panel title="Resumen de cuenta">
+            <Row
+              left="Comercio"
+              right={comercioActual?.nombre || "Sin nombre"}
+            />
+            <Row left="Rubro" right={comercioActual?.rubro || "Sin rubro"} />
+            <Row
+              left="Teléfono"
+              right={comercioActual?.telefono || "Sin teléfono"}
+            />
+            <Row left="Estado" right={comercioActual?.estado || "activo"} />
+          </Panel>
+        </>
+      )}
+
+      {pestana === "equipo" && puedeGestionarEquipo && (
+        <>
+          <Panel title="Invitar empleado">
+            {!mostrarInvitacion ? (
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 14,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <strong style={{ display: "block", color: "#0f172a" }}>
+                    Agregá personas con su propia cuenta
+                  </strong>
+                  <p style={{ margin: "6px 0 0", color: "#64748b" }}>
+                    Elegí acceso total o permisos específicos antes de enviar la
+                    invitación.
+                  </p>
+                </div>
+
+                <Button onClick={() => setMostrarInvitacion(true)}>
+                  + Invitar empleado
+                </Button>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 18 }}>
+                <Input
+                  placeholder="Correo electrónico del empleado"
+                  value={emailInvitacion}
+                  onChange={setEmailInvitacion}
+                />
+
+                <SelectorPermisos
+                  accesoTotal={accesoTotalInvitacion}
+                  setAccesoTotal={setAccesoTotalInvitacion}
+                  permisos={permisosInvitacion}
+                  setPermisos={setPermisosInvitacion}
+                />
+
+                <div style={styles.actions}>
+                  <Button onClick={crearInvitacion}>
+                    {creandoInvitacion
+                      ? "Creando invitación..."
+                      : "Crear invitación"}
+                  </Button>
+                  <SecondaryButton onClick={limpiarFormularioInvitacion}>
+                    Cancelar
+                  </SecondaryButton>
+                </div>
+              </div>
+            )}
+          </Panel>
+
+          {invitacionesPendientes.length > 0 && (
+            <Panel title="Invitaciones pendientes">
+              <div style={{ display: "grid", gap: 12 }}>
+                {invitacionesPendientes.map((invitacion) => (
+                  <div
+                    key={invitacion.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 14,
+                      flexWrap: "wrap",
+                      padding: 14,
+                      border: "1px solid #fde68a",
+                      borderRadius: 12,
+                      background: "#fffbeb",
+                    }}
+                  >
+                    <div>
+                      <strong style={{ display: "block", color: "#92400e" }}>
+                        {invitacion.email}
+                      </strong>
+                      <span style={{ fontSize: 13, color: "#78716c" }}>
+                        Vence: {formatDate(invitacion.fechaExpiracion)} · {" "}
+                        {invitacion.accesoTotal
+                          ? "Acceso total"
+                          : `${Object.values(invitacion.permisos).filter(Boolean).length} permisos`}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        style={styles.smallButtonAlt}
+                        onClick={() => copiarEnlaceInvitacion(invitacion)}
+                      >
+                        Copiar enlace
+                      </button>
+                      <button
+                        type="button"
+                        style={styles.smallButton}
+                        onClick={() => enviarInvitacionPorCorreo(invitacion)}
+                      >
+                        Enviar por correo
+                      </button>
+                      <button
+                        type="button"
+                        style={{
+                          ...styles.smallButton,
+                          background: "#fee2e2",
+                          color: "#991b1b",
+                        }}
+                        onClick={() => cancelarInvitacion(invitacion)}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          <Panel title="Equipo del comercio">
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+                flexWrap: "wrap",
+                marginBottom: 18,
+              }}
+            >
+              <p style={{ margin: 0, color: "#64748b" }}>
+                Personas que tienen acceso a este comercio.
+              </p>
+
+              <button
+                type="button"
+                style={styles.smallButton}
+                onClick={cargarEquipoCompleto}
+                disabled={cargandoEquipo}
+              >
+                {cargandoEquipo ? "Actualizando..." : "Actualizar"}
+              </button>
+            </div>
+
+            {cargandoEquipo && equipo.length === 0 ? (
+              <Empty text="Cargando equipo..." />
+            ) : errorEquipo ? (
+              <div
+                style={{
+                  padding: 14,
+                  borderRadius: 10,
+                  background: "#fee2e2",
+                  color: "#991b1b",
+                }}
+              >
+                Error al cargar el equipo: {errorEquipo}
+              </div>
+            ) : equipo.length === 0 ? (
+              <Empty text="Todavía no hay usuarios asociados al comercio." />
+            ) : (
+              <div style={{ display: "grid", gap: 12 }}>
+                {equipo.map((miembro) => {
+                  const cantidadPermisos = Object.values(
+                    miembro.permisos || {},
+                  ).filter(Boolean).length;
+                  const esEmpleado = miembro.rol === "empleado";
+
+                  const etiquetaRol =
+                    miembro.rol === "admin_secretaria"
+                      ? "Secretaría"
+                      : miembro.rol === "admin_comercio"
+                        ? "Administrador"
+                        : "Empleado";
+
+                  return (
+                    <div
+                      key={miembro.relacionId}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 16,
+                        flexWrap: "wrap",
+                        padding: 16,
+                        border: "1px solid #e2e8f0",
+                        borderRadius: 12,
+                        background: "#ffffff",
+                      }}
+                    >
+                      <div>
+                        <strong
+                          style={{
+                            display: "block",
+                            color: "#0f172a",
+                            marginBottom: 5,
+                          }}
+                        >
+                          {miembro.email}
+                        </strong>
+                        <span style={{ fontSize: 13, color: "#64748b" }}>
+                          {etiquetaRol}
+                        </span>
+                      </div>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <span
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            background:
+                              miembro.estado === "activo"
+                                ? "#dcfce7"
+                                : "#fee2e2",
+                            color:
+                              miembro.estado === "activo"
+                                ? "#166534"
+                                : "#991b1b",
+                          }}
+                        >
+                          {miembro.estado === "activo"
+                            ? "Activo"
+                            : "Suspendido"}
+                        </span>
+
+                        <span
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            background: miembro.accesoTotal
+                              ? "#dbeafe"
+                              : "#f1f5f9",
+                            color: miembro.accesoTotal
+                              ? "#1d4ed8"
+                              : "#475569",
+                          }}
+                        >
+                          {miembro.accesoTotal
+                            ? "Acceso total"
+                            : `${cantidadPermisos} permisos`}
+                        </span>
+
+                        {esEmpleado && (
+                          <>
+                            <button
+                              type="button"
+                              style={styles.smallButton}
+                              onClick={() => abrirEdicionMiembro(miembro)}
+                            >
+                              Editar permisos
+                            </button>
+                            <button
+                              type="button"
+                              style={styles.smallButtonAlt}
+                              onClick={() => alternarSuspension(miembro)}
+                            >
+                              {miembro.estado === "activo"
+                                ? "Suspender"
+                                : "Reactivar"}
+                            </button>
+                            <button
+                              type="button"
+                              style={{
+                                ...styles.smallButton,
+                                background: "#fee2e2",
+                                color: "#991b1b",
+                              }}
+                              onClick={() => desvincularMiembro(miembro)}
+                            >
+                              Desvincular
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+
+          {miembroEditando && (
+            <Panel title={`Permisos de ${miembroEditando.email}`}>
+              <div style={{ display: "grid", gap: 18 }}>
+                <label style={{ display: "grid", gap: 7 }}>
+                  <span style={{ fontWeight: 700, color: "#334155" }}>
+                    Estado de la cuenta
+                  </span>
+                  <select
+                    value={estadoEditando}
+                    onChange={(e) => setEstadoEditando(e.target.value)}
+                    style={styles.input}
+                  >
+                    <option value="activo">Activo</option>
+                    <option value="suspendido">Suspendido</option>
+                  </select>
+                </label>
+
+                <SelectorPermisos
+                  accesoTotal={accesoTotalEditando}
+                  setAccesoTotal={setAccesoTotalEditando}
+                  permisos={permisosEditando}
+                  setPermisos={setPermisosEditando}
+                />
+
+                <div style={styles.actions}>
+                  <Button onClick={guardarPermisosMiembro}>
+                    {guardandoPermisos
+                      ? "Guardando..."
+                      : "Guardar permisos"}
+                  </Button>
+                  <SecondaryButton onClick={cerrarEdicionMiembro}>
+                    Cancelar
+                  </SecondaryButton>
+                </div>
+              </div>
+            </Panel>
+          )}
+        </>
+      )}
     </>
   );
 }
@@ -1505,6 +2593,8 @@ function Sidebar({
   emailUsuario,
   comercioActual,
   rolUsuario,
+  accesoTotalUsuario,
+  permisosUsuario,
   cerrarSesion,
 }: {
   seccion: Seccion;
@@ -1512,6 +2602,8 @@ function Sidebar({
   emailUsuario: string;
   comercioActual: Comercio | null;
   rolUsuario: string;
+  accesoTotalUsuario: boolean;
+  permisosUsuario: Record<string, boolean>;
   cerrarSesion: () => void;
 }) {
   const [menuAbierto, setMenuAbierto] = useState(false);
@@ -1527,8 +2619,83 @@ function Sidebar({
     { id: "capacitaciones", label: "Capacitaciones", icono: "✦" },
   ];
 
+  const esAdministrador =
+    rolUsuario === "admin_secretaria" || rolUsuario === "admin_comercio";
+
+  function tienePermiso(clave: string) {
+    return (
+      esAdministrador ||
+      accesoTotalUsuario ||
+      Boolean(permisosUsuario[clave])
+    );
+  }
+
+  function puedeVerSeccion(id: Seccion) {
+    if (id === "inicio" || id === "capacitaciones") return true;
+    if (id === "miComercio") return esAdministrador;
+
+    if (id === "productos") {
+      return [
+        "productos.ver",
+        "productos.crear",
+        "productos.editar",
+        "productos.eliminar",
+        "stock.ingresar",
+        "stock.ver_historial",
+        "ventas.crear",
+      ].some(tienePermiso);
+    }
+
+    if (id === "clientes") {
+      return [
+        "clientes.ver",
+        "clientes.crear",
+        "clientes.editar",
+        "clientes.eliminar",
+        "ventas.crear",
+      ].some(tienePermiso);
+    }
+
+    if (id === "ventas") {
+      return ["ventas.ver", "ventas.crear", "ventas.anular"].some(
+        tienePermiso,
+      );
+    }
+
+    if (id === "caja") {
+      return [
+        "caja.ver",
+        "caja.abrir",
+        "caja.cerrar",
+        "caja.registrar_movimiento",
+        "ventas.crear",
+        "ventas.anular",
+      ].some(tienePermiso);
+    }
+
+    if (id === "gastos") {
+      return [
+        "gastos.ver",
+        "gastos.crear",
+        "gastos.editar",
+        "gastos.eliminar",
+        "reportes.ver",
+      ].some(tienePermiso);
+    }
+
+    if (id === "reportes") return tienePermiso("reportes.ver");
+
+    return false;
+  }
+
+  const itemsVisibles = items.filter((item) => puedeVerSeccion(item.id));
+
   const etiquetaRol =
-    rolUsuario === "admin_secretaria" ? "Secretaría" : "Comercio";
+    rolUsuario === "admin_secretaria"
+      ? "Secretaría"
+      : rolUsuario === "admin_comercio"
+        ? "Administrador"
+        : "Empleado";
 
   return (
     <aside className="app-sidebar" style={styles.sidebar}>
@@ -1565,7 +2732,7 @@ function Sidebar({
         </p>
 
         <nav className="app-sidebar-nav" style={{ marginTop: 10 }}>
-          {items.map((item) => {
+          {itemsVisibles.map((item) => {
             const activo = seccion === item.id;
 
             return (

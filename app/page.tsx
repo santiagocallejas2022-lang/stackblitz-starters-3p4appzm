@@ -8,6 +8,7 @@ type Seccion =
   | "miComercio"
   | "productos"
   | "ventas"
+  | "pedidos"
   | "caja"
   | "clientes"
   | "gastos"
@@ -106,6 +107,25 @@ const GRUPOS_PERMISOS: GrupoPermisos[] = [
     ],
   },
   {
+    titulo: "Pedidos",
+    permisos: [
+      { clave: "pedidos_online.ver", etiqueta: "Ver pedidos online" },
+      { clave: "pedidos_online.crear", etiqueta: "Crear pedidos" },
+      {
+        clave: "pedidos_online.gestionar",
+        etiqueta: "Preparar, despachar y entregar pedidos",
+      },
+      {
+        clave: "pedidos_online.cancelar",
+        etiqueta: "Cancelar pedidos y devolver stock",
+      },
+      {
+        clave: "pedidos_online.configurar",
+        etiqueta: "Configurar conexiones con tiendas",
+      },
+    ],
+  },
+  {
     titulo: "Reportes",
     permisos: [{ clave: "reportes.ver", etiqueta: "Ver reportes" }],
   },
@@ -169,6 +189,63 @@ type Venta = {
   anuladaPor: string | null;
   registradaPor: string | null;
   registradaPorEmail: string;
+};
+
+type PedidoOnlineItem = {
+  id: number;
+  pedidoId: number;
+  productoId: number;
+  nombreProducto: string;
+  codigoProducto: string;
+  cantidad: number;
+  precioUnitario: number;
+  subtotal: number;
+};
+
+type PedidoOnline = {
+  id: number;
+  comercioId: number;
+  numero: string;
+  canal: string;
+  pedidoExternoId: string | null;
+  clienteNombre: string;
+  clienteTelefono: string;
+  clienteEmail: string;
+  tipoEntrega: "retiro" | "envio";
+  direccionEntrega: string;
+  localidadEntrega: string;
+  estado:
+    | "nuevo"
+    | "preparacion"
+    | "listo"
+    | "enviado"
+    | "entregado"
+    | "cancelado";
+  estadoPago: "pendiente" | "aprobado" | "rechazado" | "reembolsado";
+  medioPago: string;
+  total: number;
+  costoEnvio: number;
+  stockDescontado: boolean;
+  fechaPedido: string;
+  fechaLimite: string | null;
+  observaciones: string;
+  repartidor: string;
+  codigoSeguimiento: string;
+  createdAt: string;
+  updatedAt: string;
+  items: PedidoOnlineItem[];
+};
+
+type MovimientoOnline = {
+  id: number;
+  comercioId: number;
+  pedidoId: number | null;
+  tipo: "ingreso" | "egreso";
+  estado: "pendiente" | "acreditado" | "revertido";
+  concepto: string;
+  medioPago: string;
+  monto: number;
+  fecha: string;
 };
 
 type MovimientoCaja = {
@@ -382,6 +459,8 @@ export default function Home() {
   const [ingresosStock, setIngresosStock] = useState<IngresoStock[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [ventas, setVentas] = useState<Venta[]>([]);
+  const [pedidosOnline, setPedidosOnline] = useState<PedidoOnline[]>([]);
+  const [movimientosOnline, setMovimientosOnline] = useState<MovimientoOnline[]>([]);
   const [movimientosCaja, setMovimientosCaja] = useState<MovimientoCaja[]>([]);
   const [historialCajas, setHistorialCajas] = useState<HistorialCaja[]>([]);
   const [gastos, setGastos] = useState<Gasto[]>([]);
@@ -568,6 +647,49 @@ export default function Home() {
             ]),
           ),
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "pedidos_online",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () =>
+          programarActualizacion("pedidos-online", () =>
+            Promise.all([
+              cargarPedidosOnline(comercioId),
+              cargarMovimientosOnline(comercioId),
+              cargarProductos(comercioId),
+            ]),
+          ),
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "pedido_online_items",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () =>
+          programarActualizacion("items-pedidos-online", () =>
+            cargarPedidosOnline(comercioId),
+          ),
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "movimientos_online",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        () =>
+          programarActualizacion("movimientos-online", () =>
+            cargarMovimientosOnline(comercioId),
+          ),
+      )
       .subscribe((estado) => {
         if (estado === "SUBSCRIBED") {
           setEstadoSincronizacion("activa");
@@ -745,6 +867,8 @@ export default function Home() {
       cargarClientes(idComercio),
       cargarCajasYMovimientos(idComercio),
       cargarVentas(idComercio),
+      cargarPedidosOnline(idComercio),
+      cargarMovimientosOnline(idComercio),
       cargarGastos(idComercio),
       cargarCapacitaciones(idComercio, rol || rolUsuario),
     ]);
@@ -876,6 +1000,122 @@ export default function Home() {
       alert("Error al cargar ventas: " + (error?.message || error));
     }
   }
+  async function cargarPedidosOnline(comercioId: number) {
+    try {
+      const [pedidosData, itemsData] = await Promise.all([
+        cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+          supabase
+            .from("pedidos_online")
+            .select("*")
+            .eq("comercio_id", comercioId)
+            .order("fecha_pedido", { ascending: false })
+            .range(desde, hasta),
+        ),
+        cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+          supabase
+            .from("pedido_online_items")
+            .select("*")
+            .eq("comercio_id", comercioId)
+            .order("id", { ascending: true })
+            .range(desde, hasta),
+        ),
+      ]);
+
+      const itemsPorPedido = new Map<number, PedidoOnlineItem[]>();
+
+      itemsData.forEach((item: any) => {
+        const itemNormalizado: PedidoOnlineItem = {
+          id: Number(item.id),
+          pedidoId: Number(item.pedido_id),
+          productoId: Number(item.producto_id),
+          nombreProducto: item.nombre_producto || "Producto",
+          codigoProducto: item.codigo_producto || "",
+          cantidad: Number(item.cantidad || 0),
+          precioUnitario: Number(item.precio_unitario || 0),
+          subtotal: Number(item.subtotal || 0),
+        };
+
+        const existentes = itemsPorPedido.get(itemNormalizado.pedidoId) || [];
+        existentes.push(itemNormalizado);
+        itemsPorPedido.set(itemNormalizado.pedidoId, existentes);
+      });
+
+      setPedidosOnline(
+        pedidosData.map((pedido: any) => ({
+          id: Number(pedido.id),
+          comercioId: Number(pedido.comercio_id),
+          numero: pedido.numero,
+          canal: pedido.canal || "Carga manual",
+          pedidoExternoId: pedido.pedido_externo_id || null,
+          clienteNombre: pedido.cliente_nombre || "Cliente",
+          clienteTelefono: pedido.cliente_telefono || "",
+          clienteEmail: pedido.cliente_email || "",
+          tipoEntrega: pedido.tipo_entrega === "envio" ? "envio" : "retiro",
+          direccionEntrega: pedido.direccion_entrega || "",
+          localidadEntrega: pedido.localidad_entrega || "",
+          estado: pedido.estado,
+          estadoPago: pedido.estado_pago,
+          medioPago: pedido.medio_pago || "",
+          total: Number(pedido.total || 0),
+          costoEnvio: Number(pedido.costo_envio || 0),
+          stockDescontado: Boolean(pedido.stock_descontado),
+          fechaPedido: pedido.fecha_pedido,
+          fechaLimite: pedido.fecha_limite || null,
+          observaciones: pedido.observaciones || "",
+          repartidor: pedido.repartidor || "",
+          codigoSeguimiento: pedido.codigo_seguimiento || "",
+          createdAt: pedido.created_at,
+          updatedAt: pedido.updated_at,
+          items: itemsPorPedido.get(Number(pedido.id)) || [],
+        })),
+      );
+    } catch (error: any) {
+      console.error("Error al cargar pedidos online:", error?.message || error);
+      setPedidosOnline([]);
+    }
+  }
+
+  async function cargarMovimientosOnline(comercioId: number) {
+    try {
+      const data = await cargarTodosLosRegistrosPorBloques((desde, hasta) =>
+        supabase
+          .from("movimientos_online")
+          .select("*")
+          .eq("comercio_id", comercioId)
+          .order("fecha", { ascending: false })
+          .range(desde, hasta),
+      );
+
+      setMovimientosOnline(
+        data.map((movimiento: any) => ({
+          id: Number(movimiento.id),
+          comercioId: Number(movimiento.comercio_id),
+          pedidoId:
+            movimiento.pedido_id === null
+              ? null
+              : Number(movimiento.pedido_id),
+          tipo: movimiento.tipo === "egreso" ? "egreso" : "ingreso",
+          estado:
+            movimiento.estado === "acreditado"
+              ? "acreditado"
+              : movimiento.estado === "revertido"
+                ? "revertido"
+                : "pendiente",
+          concepto: movimiento.concepto || "Movimiento online",
+          medioPago: movimiento.medio_pago || "",
+          monto: Number(movimiento.monto || 0),
+          fecha: movimiento.fecha,
+        })),
+      );
+    } catch (error: any) {
+      console.error(
+        "Error al cargar movimientos online:",
+        error?.message || error,
+      );
+      setMovimientosOnline([]);
+    }
+  }
+
   async function cargarCajasYMovimientos(comercioId: number) {
     try {
       const [cajasData, movimientosData] = await Promise.all([
@@ -1177,6 +1417,8 @@ export default function Home() {
     setIngresosStock([]);
     setClientes([]);
     setVentas([]);
+    setPedidosOnline([]);
+    setMovimientosOnline([]);
     setMovimientosCaja([]);
     setHistorialCajas([]);
     setGastos([]);
@@ -1611,6 +1853,19 @@ export default function Home() {
             />
           )}
 
+          {seccion === "pedidos" && (
+            <PedidosOnline
+              pedidos={pedidosOnline}
+              movimientosOnline={movimientosOnline}
+              productos={productos}
+              comercioActual={comercioActual}
+              recargarDatos={cargarDatos}
+              rolUsuario={rolUsuario}
+              accesoTotalUsuario={accesoTotalUsuario}
+              permisosUsuario={permisosUsuario}
+            />
+          )}
+
           {seccion === "caja" && (
             <Caja
               caja={caja}
@@ -1877,6 +2132,27 @@ function MiComercio({
     setMostrarInvitacion(false);
   }
 
+  async function enviarInvitacionDirecta(invitacionId: number) {
+    const { data, error } = await supabase.functions.invoke(
+      "enviar-invitacion-comercio",
+      {
+        body: {
+          invitacion_id: invitacionId,
+        },
+      },
+    );
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data?.ok) {
+      throw new Error(data?.error || "No se pudo enviar el correo.");
+    }
+
+    return data;
+  }
+
   async function crearInvitacion() {
     if (!comercioActual) return;
 
@@ -1889,25 +2165,49 @@ function MiComercio({
 
     setCreandoInvitacion(true);
 
-    const { error } = await supabase.rpc("crear_invitacion_comercio", {
-      p_comercio_id: comercioActual.id,
-      p_email: emailNormalizado,
-      p_acceso_total: accesoTotalInvitacion,
-      p_permisos: accesoTotalInvitacion ? {} : permisosInvitacion,
-    });
-
-    setCreandoInvitacion(false);
+    const { data, error } = await supabase.rpc(
+      "crear_invitacion_comercio",
+      {
+        p_comercio_id: comercioActual.id,
+        p_email: emailNormalizado,
+        p_acceso_total: accesoTotalInvitacion,
+        p_permisos: accesoTotalInvitacion ? {} : permisosInvitacion,
+      },
+    );
 
     if (error) {
+      setCreandoInvitacion(false);
       alert("No se pudo crear la invitación: " + error.message);
       return;
     }
 
-    limpiarFormularioInvitacion();
-    await cargarEquipoCompleto();
-    alert(
-      "Invitación creada. Copiá el enlace y envíaselo al empleado.",
-    );
+    const invitacionCreada = Array.isArray(data) ? data[0] : data;
+    const invitacionId = Number(invitacionCreada?.id);
+
+    if (!Number.isInteger(invitacionId) || invitacionId <= 0) {
+      setCreandoInvitacion(false);
+      await cargarEquipoCompleto();
+      alert(
+        "La invitación se creó, pero no se pudo identificar para enviar el correo.",
+      );
+      return;
+    }
+
+    try {
+      await enviarInvitacionDirecta(invitacionId);
+      limpiarFormularioInvitacion();
+      await cargarEquipoCompleto();
+      alert("Invitación creada y enviada por correo correctamente.");
+    } catch (error: any) {
+      limpiarFormularioInvitacion();
+      await cargarEquipoCompleto();
+      alert(
+        "La invitación se creó, pero el correo no pudo enviarse: " +
+          (error?.message || error),
+      );
+    } finally {
+      setCreandoInvitacion(false);
+    }
   }
 
   function obtenerEnlaceInvitacion(invitacion: InvitacionComercio) {
@@ -1931,16 +2231,18 @@ function MiComercio({
     }
   }
 
-  function enviarInvitacionPorCorreo(invitacion: InvitacionComercio) {
-    const enlace = obtenerEnlaceInvitacion(invitacion);
-    const asunto = encodeURIComponent("Invitación al sistema de gestión");
-    const cuerpo = encodeURIComponent(
-      `Te invitaron a formar parte de ${comercioActual?.nombre || "un comercio"}.\n\nAbrí este enlace para crear tu cuenta o iniciar sesión:\n${enlace}`,
-    );
-
-    window.location.href = `mailto:${encodeURIComponent(
-      invitacion.email,
-    )}?subject=${asunto}&body=${cuerpo}`;
+  async function enviarInvitacionPorCorreo(
+    invitacion: InvitacionComercio,
+  ) {
+    try {
+      await enviarInvitacionDirecta(invitacion.id);
+      alert(`Invitación enviada a ${invitacion.email}.`);
+    } catch (error: any) {
+      alert(
+        "No se pudo enviar la invitación: " +
+          (error?.message || error),
+      );
+    }
   }
 
   async function cancelarInvitacion(invitacion: InvitacionComercio) {
@@ -2613,6 +2915,7 @@ function Sidebar({
     { id: "productos", label: "Productos", icono: "⬡" },
     { id: "clientes", label: "Clientes", icono: "◎" },
     { id: "ventas", label: "Ventas", icono: "↗" },
+    { id: "pedidos", label: "Pedidos", icono: "▦" },
     { id: "caja", label: "Caja", icono: "▤" },
     { id: "gastos", label: "Gastos", icono: "−" },
     { id: "reportes", label: "Reportes", icono: "▣" },
@@ -2660,6 +2963,16 @@ function Sidebar({
       return ["ventas.ver", "ventas.crear", "ventas.anular"].some(
         tienePermiso,
       );
+    }
+
+    if (id === "pedidos") {
+      return [
+        "pedidos_online.ver",
+        "pedidos_online.crear",
+        "pedidos_online.gestionar",
+        "pedidos_online.cancelar",
+        "pedidos_online.configurar",
+      ].some(tienePermiso);
     }
 
     if (id === "caja") {
@@ -3966,6 +4279,1111 @@ function Clientes({
           })
         )}
       </Panel>
+    </>
+  );
+}
+
+function PedidosOnline({
+  pedidos,
+  movimientosOnline,
+  productos,
+  comercioActual,
+  recargarDatos,
+  rolUsuario,
+  accesoTotalUsuario,
+  permisosUsuario,
+}: {
+  pedidos: PedidoOnline[];
+  movimientosOnline: MovimientoOnline[];
+  productos: Producto[];
+  comercioActual: Comercio | null;
+  recargarDatos: () => Promise<void>;
+  rolUsuario: string;
+  accesoTotalUsuario: boolean;
+  permisosUsuario: Record<string, boolean>;
+}) {
+  type FiltroPedido =
+    | "trabajo"
+    | "nuevo"
+    | "preparacion"
+    | "listo"
+    | "enviado"
+    | "entregado"
+    | "problemas"
+    | "cancelado";
+
+  type ItemFormularioPedido = {
+    productoId: number;
+    cantidad: number;
+  };
+
+  const esAdministrador =
+    rolUsuario === "admin_secretaria" || rolUsuario === "admin_comercio";
+
+  function tienePermiso(clave: string) {
+    return (
+      esAdministrador ||
+      accesoTotalUsuario ||
+      Boolean(permisosUsuario[clave])
+    );
+  }
+
+  const puedeCrear = tienePermiso("pedidos_online.crear");
+  const puedeGestionar = tienePermiso("pedidos_online.gestionar");
+  const puedeCancelar = tienePermiso("pedidos_online.cancelar");
+  const puedeConfigurar = tienePermiso("pedidos_online.configurar");
+
+  const [filtro, setFiltro] = useState<FiltroPedido>("trabajo");
+  const [conectandoTiendanube, setConectandoTiendanube] = useState(false);
+  const [mostrarFormulario, setMostrarFormulario] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [productoSeleccionado, setProductoSeleccionado] = useState("");
+  const [cantidadSeleccionada, setCantidadSeleccionada] = useState("1");
+  const [itemsFormulario, setItemsFormulario] = useState<
+    ItemFormularioPedido[]
+  >([]);
+  const [form, setForm] = useState({
+    canal: "Carga manual",
+    clienteNombre: "",
+    clienteTelefono: "",
+    clienteEmail: "",
+    tipoEntrega: "retiro" as "retiro" | "envio",
+    direccionEntrega: "",
+    localidadEntrega: "",
+    estadoPago: "pendiente" as "pendiente" | "aprobado",
+    medioPago: "",
+    costoEnvio: "0",
+    observaciones: "",
+  });
+
+  const productosActivos = productos.filter((producto) => producto.activo);
+
+  async function conectarTiendanube() {
+    if (!comercioActual) {
+      alert("No hay comercio asociado.");
+      return;
+    }
+
+    setConectandoTiendanube(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "clever-function",
+        {
+          body: {
+            comercio_id: comercioActual.id,
+          },
+        },
+      );
+
+      if (error) {
+        console.error("Error al iniciar Tiendanube:", error);
+        alert(
+          "No se pudo iniciar la conexión con Tiendanube: " +
+            error.message,
+        );
+        return;
+      }
+
+      if (!data?.url) {
+        alert(
+          data?.error ||
+            "La función no devolvió la dirección de conexión.",
+        );
+        return;
+      }
+
+      window.location.assign(data.url);
+    } catch (error) {
+      console.error("Error inesperado al conectar Tiendanube:", error);
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Ocurrió un error al conectar Tiendanube.",
+      );
+    } finally {
+      setConectandoTiendanube(false);
+    }
+  }
+
+  function tieneProblema(pedido: PedidoOnline) {
+    return (
+      pedido.estadoPago !== "aprobado" ||
+      (pedido.estadoPago === "aprobado" && !pedido.stockDescontado) ||
+      (pedido.tipoEntrega === "envio" && !pedido.direccionEntrega.trim())
+    );
+  }
+
+  const pedidosActivos = pedidos.filter(
+    (pedido) => pedido.estado !== "entregado" && pedido.estado !== "cancelado",
+  );
+
+  const pedidosProblema = pedidos.filter(tieneProblema);
+  const pedidosParaPreparar = pedidos.filter(
+    (pedido) =>
+      pedido.estado === "nuevo" &&
+      pedido.estadoPago === "aprobado" &&
+      pedido.stockDescontado,
+  );
+
+  const ingresosOnline = movimientosOnline
+    .filter((movimiento) => movimiento.tipo === "ingreso")
+    .reduce((total, movimiento) => total + movimiento.monto, 0);
+  const egresosOnline = movimientosOnline
+    .filter((movimiento) => movimiento.tipo === "egreso")
+    .reduce((total, movimiento) => total + movimiento.monto, 0);
+  const saldoOnline = ingresosOnline - egresosOnline;
+
+  const prioridadEstado: Record<PedidoOnline["estado"], number> = {
+    nuevo: 1,
+    preparacion: 2,
+    listo: 3,
+    enviado: 4,
+    entregado: 5,
+    cancelado: 6,
+  };
+
+  const proximaTarea = pedidosActivos
+    .slice()
+    .sort((a, b) => {
+      const problemaA = tieneProblema(a) ? 1 : 0;
+      const problemaB = tieneProblema(b) ? 1 : 0;
+
+      if (problemaA !== problemaB) return problemaB - problemaA;
+
+      const prioridadA = prioridadEstado[a.estado];
+      const prioridadB = prioridadEstado[b.estado];
+      if (prioridadA !== prioridadB) return prioridadA - prioridadB;
+
+      return (
+        new Date(a.fechaPedido).getTime() -
+        new Date(b.fechaPedido).getTime()
+      );
+    })[0];
+
+  function descripcionSiguienteAccion(pedido: PedidoOnline) {
+    if (pedido.estadoPago !== "aprobado") return "Confirmar el pago";
+    if (pedido.estado === "nuevo") return "Empezar preparación";
+    if (pedido.estado === "preparacion") return "Marcar como listo";
+    if (pedido.estado === "listo" && pedido.tipoEntrega === "envio") {
+      return "Registrar el envío";
+    }
+    if (pedido.estado === "listo") return "Entregar al cliente";
+    if (pedido.estado === "enviado") return "Confirmar entrega";
+    return "Revisar pedido";
+  }
+
+  const pedidosFiltrados = pedidos.filter((pedido) => {
+    if (filtro === "trabajo") {
+      return pedido.estado !== "entregado" && pedido.estado !== "cancelado";
+    }
+    if (filtro === "problemas") return tieneProblema(pedido);
+    return pedido.estado === filtro;
+  });
+
+  function limpiarFormulario() {
+    setForm({
+      canal: "Carga manual",
+      clienteNombre: "",
+      clienteTelefono: "",
+      clienteEmail: "",
+      tipoEntrega: "retiro",
+      direccionEntrega: "",
+      localidadEntrega: "",
+      estadoPago: "pendiente",
+      medioPago: "",
+      costoEnvio: "0",
+      observaciones: "",
+    });
+    setItemsFormulario([]);
+    setProductoSeleccionado("");
+    setCantidadSeleccionada("1");
+    setMostrarFormulario(false);
+  }
+
+  function agregarItem() {
+    const productoId = Number(productoSeleccionado);
+    const cantidad = Number(cantidadSeleccionada);
+    const producto = productos.find((item) => item.id === productoId);
+
+    if (!producto) {
+      alert("Seleccioná un producto.");
+      return;
+    }
+
+    if (!Number.isInteger(cantidad) || cantidad <= 0) {
+      alert("Ingresá una cantidad entera mayor a cero.");
+      return;
+    }
+
+    setItemsFormulario((actuales) => {
+      const existente = actuales.find(
+        (item) => item.productoId === productoId,
+      );
+
+      if (existente) {
+        return actuales.map((item) =>
+          item.productoId === productoId
+            ? { ...item, cantidad: item.cantidad + cantidad }
+            : item,
+        );
+      }
+
+      return [...actuales, { productoId, cantidad }];
+    });
+
+    setProductoSeleccionado("");
+    setCantidadSeleccionada("1");
+  }
+
+  function quitarItem(productoId: number) {
+    setItemsFormulario((actuales) =>
+      actuales.filter((item) => item.productoId !== productoId),
+    );
+  }
+
+  const totalProductosFormulario = itemsFormulario.reduce((total, item) => {
+    const producto = productos.find(
+      (productoActual) => productoActual.id === item.productoId,
+    );
+    return total + (producto?.precio || 0) * item.cantidad;
+  }, 0);
+  const costoEnvioFormulario = Number(form.costoEnvio || 0);
+  const totalFormulario =
+    totalProductosFormulario +
+    (Number.isFinite(costoEnvioFormulario) ? costoEnvioFormulario : 0);
+
+  async function crearPedido() {
+    if (!comercioActual) {
+      alert("No hay comercio asociado.");
+      return;
+    }
+
+    if (!form.clienteNombre.trim()) {
+      alert("Ingresá el nombre del cliente.");
+      return;
+    }
+
+    if (form.tipoEntrega === "envio" && !form.direccionEntrega.trim()) {
+      alert("Ingresá la dirección de entrega.");
+      return;
+    }
+
+    if (itemsFormulario.length === 0) {
+      alert("Agregá al menos un producto.");
+      return;
+    }
+
+    setGuardando(true);
+
+    const { data, error } = await supabase.rpc(
+      "crear_pedido_online_manual",
+      {
+        p_comercio_id: comercioActual.id,
+        p_canal: form.canal,
+        p_cliente_nombre: form.clienteNombre.trim(),
+        p_cliente_telefono: form.clienteTelefono.trim() || null,
+        p_cliente_email: form.clienteEmail.trim() || null,
+        p_tipo_entrega: form.tipoEntrega,
+        p_direccion_entrega:
+          form.tipoEntrega === "envio"
+            ? form.direccionEntrega.trim()
+            : null,
+        p_localidad_entrega:
+          form.tipoEntrega === "envio"
+            ? form.localidadEntrega.trim() || null
+            : null,
+        p_estado_pago: form.estadoPago,
+        p_medio_pago: form.medioPago.trim() || null,
+        p_costo_envio:
+          form.tipoEntrega === "envio" ? Number(form.costoEnvio || 0) : 0,
+        p_observaciones: form.observaciones.trim() || null,
+        p_items: itemsFormulario.map((item) => ({
+          producto_id: item.productoId,
+          cantidad: item.cantidad,
+        })),
+      },
+    );
+
+    setGuardando(false);
+
+    if (error) {
+      alert("No se pudo crear el pedido: " + error.message);
+      return;
+    }
+
+    limpiarFormulario();
+    await recargarDatos();
+
+    const numero = data?.numero ? ` ${data.numero}` : "";
+    alert(`Pedido${numero} creado correctamente.`);
+  }
+
+  async function aprobarPago(pedido: PedidoOnline) {
+    if (!puedeGestionar) return;
+
+    const medioPago =
+      pedido.medioPago ||
+      prompt("Medio de pago", "Mercado Pago")?.trim() ||
+      "Venta online";
+
+    const { error } = await supabase.rpc(
+      "actualizar_pago_pedido_online",
+      {
+        p_pedido_id: pedido.id,
+        p_estado_pago: "aprobado",
+        p_medio_pago: medioPago,
+      },
+    );
+
+    if (error) {
+      alert("No se pudo aprobar el pago: " + error.message);
+      return;
+    }
+
+    await recargarDatos();
+  }
+
+  async function avanzarPedido(pedido: PedidoOnline) {
+    if (!puedeGestionar) return;
+
+    let nuevoEstado: PedidoOnline["estado"] | null = null;
+    let repartidor: string | null = null;
+    let codigoSeguimiento: string | null = null;
+
+    if (pedido.estado === "nuevo") nuevoEstado = "preparacion";
+    if (pedido.estado === "preparacion") nuevoEstado = "listo";
+
+    if (pedido.estado === "listo" && pedido.tipoEntrega === "envio") {
+      nuevoEstado = "enviado";
+      repartidor = prompt(
+        "Repartidor o empresa de entrega",
+        pedido.repartidor || "",
+      );
+
+      if (repartidor === null) return;
+
+      codigoSeguimiento = prompt(
+        "Código de seguimiento opcional",
+        pedido.codigoSeguimiento || "",
+      );
+
+      if (codigoSeguimiento === null) return;
+    }
+
+    if (pedido.estado === "listo" && pedido.tipoEntrega === "retiro") {
+      if (!confirm("¿Confirmás que el cliente retiró el pedido?")) return;
+      nuevoEstado = "entregado";
+    }
+
+    if (pedido.estado === "enviado") {
+      if (!confirm("¿Confirmás que el pedido fue entregado?")) return;
+      nuevoEstado = "entregado";
+    }
+
+    if (!nuevoEstado) return;
+
+    const { error } = await supabase.rpc(
+      "avanzar_estado_pedido_online",
+      {
+        p_pedido_id: pedido.id,
+        p_nuevo_estado: nuevoEstado,
+        p_repartidor: repartidor?.trim() || null,
+        p_codigo_seguimiento: codigoSeguimiento?.trim() || null,
+      },
+    );
+
+    if (error) {
+      alert("No se pudo actualizar el pedido: " + error.message);
+      return;
+    }
+
+    await recargarDatos();
+  }
+
+  async function cancelarPedido(pedido: PedidoOnline) {
+    if (!puedeCancelar) return;
+
+    const motivo = prompt("Motivo de la cancelación");
+    if (motivo === null) return;
+
+    if (motivo.trim().length < 3) {
+      alert("Ingresá un motivo válido.");
+      return;
+    }
+
+    if (
+      !confirm(
+        "Se cancelará el pedido y, si correspondía, se devolverá el stock. ¿Continuar?",
+      )
+    ) {
+      return;
+    }
+
+    const { error } = await supabase.rpc("cancelar_pedido_online", {
+      p_pedido_id: pedido.id,
+      p_motivo: motivo.trim(),
+    });
+
+    if (error) {
+      alert("No se pudo cancelar el pedido: " + error.message);
+      return;
+    }
+
+    await recargarDatos();
+  }
+
+  const aparienciaEstado: Record<
+    PedidoOnline["estado"],
+    { etiqueta: string; fondo: string; color: string }
+  > = {
+    nuevo: { etiqueta: "Nuevo", fondo: "#dbeafe", color: "#1d4ed8" },
+    preparacion: {
+      etiqueta: "En preparación",
+      fondo: "#fef3c7",
+      color: "#92400e",
+    },
+    listo: { etiqueta: "Listo", fondo: "#dcfce7", color: "#166534" },
+    enviado: { etiqueta: "En camino", fondo: "#ede9fe", color: "#6d28d9" },
+    entregado: {
+      etiqueta: "Entregado",
+      fondo: "#d1fae5",
+      color: "#065f46",
+    },
+    cancelado: {
+      etiqueta: "Cancelado",
+      fondo: "#fee2e2",
+      color: "#991b1b",
+    },
+  };
+
+  const filtros: { id: FiltroPedido; etiqueta: string; cantidad: number }[] = [
+    { id: "trabajo", etiqueta: "Para trabajar", cantidad: pedidosActivos.length },
+    {
+      id: "nuevo",
+      etiqueta: "Nuevos",
+      cantidad: pedidos.filter((pedido) => pedido.estado === "nuevo").length,
+    },
+    {
+      id: "preparacion",
+      etiqueta: "En preparación",
+      cantidad: pedidos.filter((pedido) => pedido.estado === "preparacion").length,
+    },
+    {
+      id: "listo",
+      etiqueta: "Listos",
+      cantidad: pedidos.filter((pedido) => pedido.estado === "listo").length,
+    },
+    {
+      id: "enviado",
+      etiqueta: "En camino",
+      cantidad: pedidos.filter((pedido) => pedido.estado === "enviado").length,
+    },
+    {
+      id: "problemas",
+      etiqueta: "Problemas",
+      cantidad: pedidosProblema.length,
+    },
+    {
+      id: "entregado",
+      etiqueta: "Entregados",
+      cantidad: pedidos.filter((pedido) => pedido.estado === "entregado").length,
+    },
+    {
+      id: "cancelado",
+      etiqueta: "Cancelados",
+      cantidad: pedidos.filter((pedido) => pedido.estado === "cancelado").length,
+    },
+  ];
+
+  return (
+    <>
+      <Header
+        title="Pedidos"
+        subtitle="Centro de pedidos, preparación, envíos y control de stock online."
+        action={
+          puedeCrear ? (
+            <Button onClick={() => setMostrarFormulario((valor) => !valor)}>
+              {mostrarFormulario ? "Cerrar formulario" : "+ Nuevo pedido"}
+            </Button>
+          ) : undefined
+        }
+      />
+
+      <div className="app-cards-grid" style={styles.cardsGrid}>
+        <Card
+          title="Para preparar"
+          value={String(pedidosParaPreparar.length)}
+          description="Pedidos pagados que esperan preparación."
+          tone={pedidosParaPreparar.length > 0 ? "orange" : "green"}
+        />
+        <Card
+          title="Listos"
+          value={String(
+            pedidos.filter((pedido) => pedido.estado === "listo").length,
+          )}
+          description="Esperan retiro o despacho."
+          tone="green"
+        />
+        <Card
+          title="Con problemas"
+          value={String(pedidosProblema.length)}
+          description="Pago, stock o datos pendientes."
+          tone={pedidosProblema.length > 0 ? "red" : "green"}
+        />
+        <Card
+          title="Saldo online"
+          value={money(saldoOnline)}
+          description="Ingresos online menos cancelaciones y reembolsos."
+          tone="purple"
+        />
+      </div>
+
+      {proximaTarea && (
+        <Panel title="Próxima tarea recomendada">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <strong style={{ display: "block", marginBottom: 6 }}>
+                {descripcionSiguienteAccion(proximaTarea)} · {proximaTarea.numero}
+              </strong>
+              <span style={{ color: "#64748b" }}>
+                {proximaTarea.clienteNombre} · {formatDate(proximaTarea.fechaPedido)}
+              </span>
+            </div>
+
+            {proximaTarea.estadoPago !== "aprobado" && puedeGestionar ? (
+              <Button onClick={() => aprobarPago(proximaTarea)}>
+                Confirmar pago
+              </Button>
+            ) : puedeGestionar ? (
+              <Button onClick={() => avanzarPedido(proximaTarea)}>
+                {descripcionSiguienteAccion(proximaTarea)}
+              </Button>
+            ) : null}
+          </div>
+        </Panel>
+      )}
+
+      {mostrarFormulario && puedeCrear && (
+        <Panel title="Cargar pedido">
+          <div className="app-form-grid" style={styles.formGrid}>
+            <select
+              style={styles.input}
+              value={form.canal}
+              onChange={(event) =>
+                setForm({ ...form, canal: event.target.value })
+              }
+            >
+              <option>Carga manual</option>
+              <option>WhatsApp</option>
+              <option>Instagram</option>
+              <option>Tiendanube</option>
+              <option>Mercado Libre</option>
+              <option>WooCommerce</option>
+              <option>Otra plataforma</option>
+            </select>
+
+            <Input
+              placeholder="Nombre del cliente"
+              value={form.clienteNombre}
+              onChange={(valor) => setForm({ ...form, clienteNombre: valor })}
+            />
+            <Input
+              placeholder="Teléfono"
+              value={form.clienteTelefono}
+              onChange={(valor) => setForm({ ...form, clienteTelefono: valor })}
+            />
+            <Input
+              placeholder="Correo opcional"
+              value={form.clienteEmail}
+              onChange={(valor) => setForm({ ...form, clienteEmail: valor })}
+            />
+
+            <select
+              style={styles.input}
+              value={form.tipoEntrega}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  tipoEntrega:
+                    event.target.value === "envio" ? "envio" : "retiro",
+                })
+              }
+            >
+              <option value="retiro">Retiro en el local</option>
+              <option value="envio">Envío a domicilio</option>
+            </select>
+
+            {form.tipoEntrega === "envio" && (
+              <>
+                <Input
+                  placeholder="Dirección de entrega"
+                  value={form.direccionEntrega}
+                  onChange={(valor) =>
+                    setForm({ ...form, direccionEntrega: valor })
+                  }
+                />
+                <Input
+                  placeholder="Localidad"
+                  value={form.localidadEntrega}
+                  onChange={(valor) =>
+                    setForm({ ...form, localidadEntrega: valor })
+                  }
+                />
+                <Input
+                  placeholder="Costo de envío"
+                  type="number"
+                  value={form.costoEnvio}
+                  onChange={(valor) => setForm({ ...form, costoEnvio: valor })}
+                />
+              </>
+            )}
+
+            <select
+              style={styles.input}
+              value={form.estadoPago}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  estadoPago:
+                    event.target.value === "aprobado"
+                      ? "aprobado"
+                      : "pendiente",
+                })
+              }
+            >
+              <option value="pendiente">Pago pendiente</option>
+              <option value="aprobado">Pago aprobado</option>
+            </select>
+
+            <Input
+              placeholder="Medio de pago"
+              value={form.medioPago}
+              onChange={(valor) => setForm({ ...form, medioPago: valor })}
+            />
+            <Input
+              placeholder="Observaciones"
+              value={form.observaciones}
+              onChange={(valor) => setForm({ ...form, observaciones: valor })}
+            />
+          </div>
+
+          <div
+            style={{
+              marginTop: 18,
+              padding: 16,
+              borderRadius: 12,
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+            }}
+          >
+            <strong style={{ display: "block", marginBottom: 12 }}>
+              Productos del pedido
+            </strong>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(220px, 1fr) 120px auto",
+                gap: 10,
+                alignItems: "center",
+              }}
+            >
+              <select
+                style={styles.input}
+                value={productoSeleccionado}
+                onChange={(event) =>
+                  setProductoSeleccionado(event.target.value)
+                }
+              >
+                <option value="">Seleccionar producto</option>
+                {productosActivos.map((producto) => (
+                  <option key={producto.id} value={producto.id}>
+                    {producto.nombre} · Stock {producto.stock} · {money(producto.precio)}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                style={styles.input}
+                type="number"
+                min="1"
+                value={cantidadSeleccionada}
+                onChange={(event) =>
+                  setCantidadSeleccionada(event.target.value)
+                }
+              />
+
+              <button
+                type="button"
+                style={styles.smallButtonAlt}
+                onClick={agregarItem}
+              >
+                Agregar
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
+              {itemsFormulario.length === 0 ? (
+                <Empty text="Todavía no agregaste productos." />
+              ) : (
+                itemsFormulario.map((item) => {
+                  const producto = productos.find(
+                    (productoActual) => productoActual.id === item.productoId,
+                  );
+
+                  return (
+                    <div
+                      key={item.productoId}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 12,
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: "#ffffff",
+                        border: "1px solid #e2e8f0",
+                      }}
+                    >
+                      <span>
+                        {item.cantidad} × {producto?.nombre || "Producto"}
+                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <strong>
+                          {money((producto?.precio || 0) * item.cantidad)}
+                        </strong>
+                        <button
+                          type="button"
+                          style={styles.smallButton}
+                          onClick={() => quitarItem(item.productoId)}
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                marginTop: 14,
+                fontSize: 18,
+              }}
+            >
+              <strong>Total: {money(totalFormulario)}</strong>
+            </div>
+          </div>
+
+          <div className="app-actions" style={styles.actions}>
+            <Button onClick={crearPedido}>
+              {guardando ? "Guardando..." : "Crear pedido"}
+            </Button>
+            <SecondaryButton onClick={limpiarFormulario}>
+              Cancelar
+            </SecondaryButton>
+          </div>
+        </Panel>
+      )}
+
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          flexWrap: "wrap",
+          marginBottom: 18,
+        }}
+      >
+        {filtros.map((item) => {
+          const activo = filtro === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setFiltro(item.id)}
+              style={{
+                padding: "9px 13px",
+                borderRadius: 999,
+                border: activo ? "1px solid #dc2626" : "1px solid #cbd5e1",
+                background: activo ? "#fee2e2" : "#ffffff",
+                color: activo ? "#991b1b" : "#475569",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {item.etiqueta} ({item.cantidad})
+            </button>
+          );
+        })}
+      </div>
+
+      {pedidosFiltrados.length === 0 ? (
+        <Panel title="Pedidos">
+          <Empty text="No hay pedidos en esta etapa." />
+        </Panel>
+      ) : (
+        <div style={{ display: "grid", gap: 14 }}>
+          {pedidosFiltrados.map((pedido) => {
+            const estado = aparienciaEstado[pedido.estado];
+            const problema = tieneProblema(pedido);
+
+            return (
+              <div
+                key={pedido.id}
+                style={{
+                  padding: 18,
+                  background: "#ffffff",
+                  borderRadius: 14,
+                  border: problema
+                    ? "1px solid #fca5a5"
+                    : "1px solid #e2e8f0",
+                  boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    gap: 14,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <strong style={{ fontSize: 17 }}>{pedido.numero}</strong>
+                      <span
+                        style={{
+                          padding: "5px 9px",
+                          borderRadius: 999,
+                          background: estado.fondo,
+                          color: estado.color,
+                          fontSize: 12,
+                          fontWeight: 800,
+                        }}
+                      >
+                        {estado.etiqueta}
+                      </span>
+                      <span
+                        style={{
+                          padding: "5px 9px",
+                          borderRadius: 999,
+                          background:
+                            pedido.estadoPago === "aprobado"
+                              ? "#dcfce7"
+                              : "#fff7ed",
+                          color:
+                            pedido.estadoPago === "aprobado"
+                              ? "#166534"
+                              : "#9a3412",
+                          fontSize: 12,
+                          fontWeight: 800,
+                        }}
+                      >
+                        Pago {pedido.estadoPago}
+                      </span>
+                      {problema && (
+                        <span
+                          style={{
+                            padding: "5px 9px",
+                            borderRadius: 999,
+                            background: "#fee2e2",
+                            color: "#991b1b",
+                            fontSize: 12,
+                            fontWeight: 800,
+                          }}
+                        >
+                          Requiere atención
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ margin: "8px 0 0", color: "#475569" }}>
+                      {pedido.clienteNombre} · {pedido.canal} · {formatDate(pedido.fechaPedido)}
+                    </p>
+                    <p style={{ margin: "5px 0 0", color: "#64748b" }}>
+                      {pedido.tipoEntrega === "envio"
+                        ? `Envío a ${pedido.direccionEntrega || "dirección pendiente"}${
+                            pedido.localidadEntrega
+                              ? `, ${pedido.localidadEntrega}`
+                              : ""
+                          }`
+                        : "Retiro en el local"}
+                    </p>
+                  </div>
+
+                  <div style={{ textAlign: "right" }}>
+                    <strong style={{ display: "block", fontSize: 20 }}>
+                      {money(pedido.total)}
+                    </strong>
+                    <span style={{ color: "#64748b", fontSize: 13 }}>
+                      Stock {pedido.stockDescontado ? "descontado" : "pendiente"}
+                    </span>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 7,
+                    marginTop: 16,
+                    padding: 13,
+                    borderRadius: 10,
+                    background: "#f8fafc",
+                  }}
+                >
+                  {pedido.items.map((item) => (
+                    <div
+                      key={item.id}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                      }}
+                    >
+                      <span>
+                        {item.cantidad} × {item.nombreProducto}
+                      </span>
+                      <strong>{money(item.subtotal)}</strong>
+                    </div>
+                  ))}
+                </div>
+
+                {(pedido.repartidor || pedido.codigoSeguimiento) && (
+                  <p style={{ margin: "12px 0 0", color: "#475569" }}>
+                    Entrega: {pedido.repartidor || "Sin repartidor"}
+                    {pedido.codigoSeguimiento
+                      ? ` · Seguimiento ${pedido.codigoSeguimiento}`
+                      : ""}
+                  </p>
+                )}
+
+                {pedido.observaciones && (
+                  <p style={{ margin: "10px 0 0", color: "#64748b" }}>
+                    Observaciones: {pedido.observaciones}
+                  </p>
+                )}
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 9,
+                    flexWrap: "wrap",
+                    marginTop: 16,
+                  }}
+                >
+                  {pedido.estadoPago === "pendiente" && puedeGestionar && (
+                    <button
+                      type="button"
+                      style={styles.smallButtonAlt}
+                      onClick={() => aprobarPago(pedido)}
+                    >
+                      Confirmar pago y descontar stock
+                    </button>
+                  )}
+
+                  {pedido.estadoPago === "aprobado" &&
+                    pedido.estado !== "entregado" &&
+                    pedido.estado !== "cancelado" &&
+                    puedeGestionar && (
+                      <button
+                        type="button"
+                        style={styles.smallButtonAlt}
+                        onClick={() => avanzarPedido(pedido)}
+                      >
+                        {descripcionSiguienteAccion(pedido)}
+                      </button>
+                    )}
+
+                  {pedido.estado !== "entregado" &&
+                    pedido.estado !== "cancelado" &&
+                    puedeCancelar && (
+                      <button
+                        type="button"
+                        style={{
+                          ...styles.smallButton,
+                          background: "#fee2e2",
+                          color: "#991b1b",
+                        }}
+                        onClick={() => cancelarPedido(pedido)}
+                      >
+                        Cancelar pedido
+                      </button>
+                    )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop: 20 }}>
+        <Panel title="Sincronización con tiendas online">
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 16,
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <strong style={{ display: "block", marginBottom: 6 }}>
+                Tiendanube
+              </strong>
+
+              <p
+                style={{
+                  margin: 0,
+                  color: "#64748b",
+                  lineHeight: 1.6,
+                  maxWidth: 650,
+                }}
+              >
+                Conectá la tienda para recibir automáticamente sus pedidos y
+                preparar la sincronización del stock.
+              </p>
+            </div>
+
+            {puedeConfigurar ? (
+              <button
+                type="button"
+                style={styles.smallButtonAlt}
+                onClick={conectarTiendanube}
+                disabled={conectandoTiendanube || !comercioActual}
+              >
+                {conectandoTiendanube
+                  ? "Conectando..."
+                  : "Conectar Tiendanube"}
+              </button>
+            ) : (
+              <span style={{ color: "#64748b", fontSize: 14 }}>
+                No tenés permiso para configurar integraciones.
+              </span>
+            )}
+          </div>
+        </Panel>
+      </div>
     </>
   );
 }

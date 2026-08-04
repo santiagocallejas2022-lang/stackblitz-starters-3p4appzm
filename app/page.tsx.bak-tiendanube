@@ -231,14 +231,6 @@ type PedidoOnline = {
   observaciones: string;
   repartidor: string;
   codigoSeguimiento: string;
-  enlaceSeguimiento: string;
-  estadoGestion: string;
-  sincronizacionEstado:
-    | "sincronizado"
-    | "sincronizando"
-    | "pendiente"
-    | "error";
-  sincronizacionError: string;
   createdAt: string;
   updatedAt: string;
   items: PedidoOnlineItem[];
@@ -1070,16 +1062,8 @@ export default function Home() {
           fechaPedido: pedido.fecha_pedido,
           fechaLimite: pedido.fecha_limite || null,
           observaciones: pedido.observaciones || "",
-          repartidor:
-            pedido.empresa_envio || pedido.repartidor || "",
+          repartidor: pedido.repartidor || "",
           codigoSeguimiento: pedido.codigo_seguimiento || "",
-          enlaceSeguimiento: pedido.enlace_seguimiento || "",
-          estadoGestion:
-            pedido.estado_gestion || pedido.estado || "nuevo",
-          sincronizacionEstado:
-            pedido.sincronizacion_estado || "sincronizado",
-          sincronizacionError:
-            pedido.sincronizacion_error || "",
           createdAt: pedido.created_at,
           updatedAt: pedido.updated_at,
           items: itemsPorPedido.get(Number(pedido.id)) || [],
@@ -4425,7 +4409,6 @@ function PedidosOnline({
 
   function tieneProblema(pedido: PedidoOnline) {
     return (
-      pedido.sincronizacionEstado === "error" ||
       pedido.estadoPago !== "aprobado" ||
       (pedido.estadoPago === "aprobado" && !pedido.stockDescontado) ||
       (pedido.tipoEntrega === "envio" && !pedido.direccionEntrega.trim())
@@ -4480,30 +4463,17 @@ function PedidosOnline({
     })[0];
 
   function descripcionSiguienteAccion(pedido: PedidoOnline) {
-    if (pedido.sincronizacionEstado === "sincronizando") {
-      return "Sincronizando con Tiendanube...";
-    }
-
     if (pedido.estadoPago !== "aprobado") return "Confirmar el pago";
     if (pedido.estado === "nuevo") return "Empezar preparación";
-
-    if (pedido.estado === "preparacion") {
-      return pedido.tipoEntrega === "retiro"
-        ? "Listo para retirar"
-        : "Marcar como listo";
-    }
-
+    if (pedido.estado === "preparacion") return "Marcar como listo";
     if (pedido.estado === "listo" && pedido.tipoEntrega === "envio") {
       return "Registrar el envío";
     }
-
-    if (pedido.estado === "listo" && pedido.tipoEntrega === "retiro") {
-      return "Confirmar retiro";
-    }
-
+    if (pedido.estado === "listo") return "Entregar al cliente";
     if (pedido.estado === "enviado") return "Confirmar entrega";
     return "Revisar pedido";
   }
+
   const pedidosFiltrados = pedidos.filter((pedido) => {
     if (filtro === "trabajo") {
       return pedido.estado !== "entregado" && pedido.estado !== "cancelado";
@@ -4675,48 +4645,9 @@ function PedidosOnline({
     await recargarDatos();
   }
 
-  function esPedidoRealDeTiendanube(pedido: PedidoOnline) {
-    return (
-      pedido.canal.trim().toLowerCase() === "tiendanube" &&
-      Boolean(pedido.pedidoExternoId)
-    );
-  }
+  async function avanzarPedido(pedido: PedidoOnline) {
+    if (!puedeGestionar) return;
 
-  async function invocarAccionTiendanube(
-    pedido: PedidoOnline,
-    accion:
-      | "preparacion"
-      | "listo"
-      | "enviado"
-      | "listo_retiro"
-      | "entregado"
-      | "cancelar"
-      | "reintentar",
-    payload: Record<string, unknown> = {},
-  ) {
-    const { data, error } = await supabase.functions.invoke(
-      "tiendanube-acciones-pedido",
-      {
-        body: {
-          pedido_id: pedido.id,
-          accion,
-          payload,
-        },
-      },
-    );
-
-    if (error) {
-      throw new Error(error.message || "Falló la comunicación con Tiendanube.");
-    }
-
-    if (!data?.ok) {
-      throw new Error(data?.error || "Tiendanube rechazó la acción.");
-    }
-
-    return data;
-  }
-
-  async function avanzarPedidoLocal(pedido: PedidoOnline) {
     let nuevoEstado: PedidoOnline["estado"] | null = null;
     let repartidor: string | null = null;
     let codigoSeguimiento: string | null = null;
@@ -4759,124 +4690,16 @@ function PedidosOnline({
         p_pedido_id: pedido.id,
         p_nuevo_estado: nuevoEstado,
         p_repartidor: repartidor?.trim() || null,
-        p_codigo_seguimiento:
-          codigoSeguimiento?.trim() || null,
+        p_codigo_seguimiento: codigoSeguimiento?.trim() || null,
       },
     );
 
     if (error) {
-      throw new Error(error.message);
-    }
-  }
-
-  async function avanzarPedido(pedido: PedidoOnline) {
-    if (!puedeGestionar) return;
-
-    if (pedido.sincronizacionEstado === "sincronizando") {
-      alert("El pedido ya se está sincronizando.");
+      alert("No se pudo actualizar el pedido: " + error.message);
       return;
     }
 
-    try {
-      if (!esPedidoRealDeTiendanube(pedido)) {
-        await avanzarPedidoLocal(pedido);
-        await recargarDatos();
-        return;
-      }
-
-      let accion:
-        | "preparacion"
-        | "listo"
-        | "enviado"
-        | "listo_retiro"
-        | "entregado"
-        | null = null;
-
-      let payload: Record<string, unknown> = {};
-
-      if (pedido.estado === "nuevo") {
-        accion = "preparacion";
-      } else if (pedido.estado === "preparacion") {
-        accion =
-          pedido.tipoEntrega === "retiro"
-            ? "listo_retiro"
-            : "listo";
-      } else if (
-        pedido.estado === "listo" &&
-        pedido.tipoEntrega === "envio"
-      ) {
-        const empresaEnvio = prompt(
-          "Empresa de envío",
-          pedido.repartidor || "",
-        );
-
-        if (empresaEnvio === null) return;
-
-        if (empresaEnvio.trim().length < 2) {
-          alert("Ingresá la empresa de envío.");
-          return;
-        }
-
-        const codigoSeguimiento = prompt(
-          "Código de seguimiento",
-          pedido.codigoSeguimiento || "",
-        );
-
-        if (codigoSeguimiento === null) return;
-
-        if (codigoSeguimiento.trim().length < 2) {
-          alert("Ingresá el código de seguimiento.");
-          return;
-        }
-
-        const enlaceSeguimiento = prompt(
-          "Enlace de seguimiento opcional",
-          pedido.enlaceSeguimiento || "",
-        );
-
-        if (enlaceSeguimiento === null) return;
-
-        const notificarCliente = confirm(
-          "¿Querés que Tiendanube avise al cliente sobre el envío?",
-        );
-
-        accion = "enviado";
-        payload = {
-          empresa_envio: empresaEnvio.trim(),
-          codigo_seguimiento: codigoSeguimiento.trim(),
-          enlace_seguimiento:
-            enlaceSeguimiento.trim() || null,
-          notificar_cliente: notificarCliente,
-        };
-      } else if (
-        pedido.estado === "listo" &&
-        pedido.tipoEntrega === "retiro"
-      ) {
-        if (!confirm("¿Confirmás que el cliente retiró el pedido?")) {
-          return;
-        }
-
-        accion = "entregado";
-      } else if (pedido.estado === "enviado") {
-        if (!confirm("¿Confirmás que el pedido fue entregado?")) {
-          return;
-        }
-
-        accion = "entregado";
-      }
-
-      if (!accion) return;
-
-      await invocarAccionTiendanube(pedido, accion, payload);
-      await recargarDatos();
-    } catch (error) {
-      console.error("Error al gestionar pedido:", error);
-      alert(
-        "No se pudo actualizar el pedido: " +
-          (error instanceof Error ? error.message : String(error)),
-      );
-      await recargarDatos();
-    }
+    await recargarDatos();
   }
 
   async function cancelarPedido(pedido: PedidoOnline) {
@@ -4890,101 +4713,25 @@ function PedidosOnline({
       return;
     }
 
-    if (!esPedidoRealDeTiendanube(pedido)) {
-      if (
-        !confirm(
-          "Se cancelará el pedido y, si correspondía, se devolverá el stock. ¿Continuar?",
-        )
-      ) {
-        return;
-      }
-
-      const { error } = await supabase.rpc(
-        "cancelar_pedido_online",
-        {
-          p_pedido_id: pedido.id,
-          p_motivo: motivo.trim(),
-        },
-      );
-
-      if (error) {
-        alert("No se pudo cancelar el pedido: " + error.message);
-        return;
-      }
-
-      await recargarDatos();
-      return;
-    }
-
-    const opcion = prompt(
-      "Tipo de motivo:\n1 - Lo pidió el cliente\n2 - Falta de stock\n3 - Fraude\n4 - Otro",
-      "4",
-    );
-
-    if (opcion === null) return;
-
-    const motivos: Record<string, string> = {
-      "1": "customer",
-      "2": "inventory",
-      "3": "fraud",
-      "4": "other",
-    };
-
-    const codigoMotivo = motivos[opcion.trim()] || "other";
-
     if (
       !confirm(
-        "Se cancelará también en Tiendanube, se repondrá el stock y se avisará al cliente. El reembolso del dinero se controla por separado. ¿Continuar?",
+        "Se cancelará el pedido y, si correspondía, se devolverá el stock. ¿Continuar?",
       )
     ) {
       return;
     }
 
-    try {
-      await invocarAccionTiendanube(
-        pedido,
-        "cancelar",
-        {
-          motivo_cancelacion: motivo.trim(),
-          codigo_motivo_cancelacion: codigoMotivo,
-          notificar_cliente: true,
-          reponer_stock_tiendanube: true,
-        },
-      );
+    const { error } = await supabase.rpc("cancelar_pedido_online", {
+      p_pedido_id: pedido.id,
+      p_motivo: motivo.trim(),
+    });
 
-      await recargarDatos();
-
-      alert(
-        "Pedido cancelado en el sistema y en Tiendanube. Revisá el reembolso en el medio de pago.",
-      );
-    } catch (error) {
-      console.error("Error al cancelar pedido:", error);
-      alert(
-        "No se pudo cancelar el pedido: " +
-          (error instanceof Error ? error.message : String(error)),
-      );
-      await recargarDatos();
+    if (error) {
+      alert("No se pudo cancelar el pedido: " + error.message);
+      return;
     }
-  }
 
-  async function reintentarSincronizacion(
-    pedido: PedidoOnline,
-  ) {
-    try {
-      await invocarAccionTiendanube(
-        pedido,
-        "reintentar",
-      );
-
-      await recargarDatos();
-    } catch (error) {
-      console.error("Error al reintentar:", error);
-      alert(
-        "El reintento falló: " +
-          (error instanceof Error ? error.message : String(error)),
-      );
-      await recargarDatos();
-    }
+    await recargarDatos();
   }
 
   const aparienciaEstado: Record<
@@ -5118,13 +4865,7 @@ function PedidosOnline({
                 Confirmar pago
               </Button>
             ) : puedeGestionar ? (
-              <Button
-                onClick={() => avanzarPedido(proximaTarea)}
-                disabled={
-                  proximaTarea.sincronizacionEstado ===
-                  "sincronizando"
-                }
-              >
+              <Button onClick={() => avanzarPedido(proximaTarea)}>
                 {descripcionSiguienteAccion(proximaTarea)}
               </Button>
             ) : null}
@@ -5441,9 +5182,7 @@ function PedidosOnline({
                           fontWeight: 800,
                         }}
                       >
-                        {pedido.estadoGestion === "listo_retiro"
-                          ? "Listo para retirar"
-                          : estado.etiqueta}
+                        {estado.etiqueta}
                       </span>
                       <span
                         style={{
@@ -5529,27 +5268,12 @@ function PedidosOnline({
                   ))}
                 </div>
 
-                {(pedido.repartidor ||
-                  pedido.codigoSeguimiento ||
-                  pedido.enlaceSeguimiento) && (
+                {(pedido.repartidor || pedido.codigoSeguimiento) && (
                   <p style={{ margin: "12px 0 0", color: "#475569" }}>
-                    Entrega: {pedido.repartidor || "Sin empresa"}
+                    Entrega: {pedido.repartidor || "Sin repartidor"}
                     {pedido.codigoSeguimiento
                       ? ` · Seguimiento ${pedido.codigoSeguimiento}`
                       : ""}
-                    {pedido.enlaceSeguimiento ? (
-                      <>
-                        {" · "}
-                        <a
-                          href={pedido.enlaceSeguimiento}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: "#2563eb", fontWeight: 700 }}
-                        >
-                          Abrir seguimiento
-                        </a>
-                      </>
-                    ) : null}
                   </p>
                 )}
 
@@ -5557,35 +5281,6 @@ function PedidosOnline({
                   <p style={{ margin: "10px 0 0", color: "#64748b" }}>
                     Observaciones: {pedido.observaciones}
                   </p>
-                )}
-
-                {pedido.sincronizacionEstado === "sincronizando" && (
-                  <p
-                    style={{
-                      margin: "10px 0 0",
-                      color: "#1d4ed8",
-                      fontWeight: 700,
-                    }}
-                  >
-                    Sincronizando con Tiendanube...
-                  </p>
-                )}
-
-                {pedido.sincronizacionEstado === "error" && (
-                  <div
-                    style={{
-                      marginTop: 10,
-                      padding: 10,
-                      borderRadius: 9,
-                      background: "#fef2f2",
-                      color: "#991b1b",
-                    }}
-                  >
-                    <strong>Error de sincronización.</strong>
-                    {pedido.sincronizacionError
-                      ? ` ${pedido.sincronizacionError}`
-                      : ""}
-                  </div>
                 )}
 
                 <div
@@ -5614,30 +5309,8 @@ function PedidosOnline({
                         type="button"
                         style={styles.smallButtonAlt}
                         onClick={() => avanzarPedido(pedido)}
-                        disabled={
-                          pedido.sincronizacionEstado ===
-                          "sincronizando"
-                        }
                       >
                         {descripcionSiguienteAccion(pedido)}
-                      </button>
-                    )}
-
-                  {pedido.sincronizacionEstado === "error" &&
-                    esPedidoRealDeTiendanube(pedido) &&
-                    puedeGestionar && (
-                      <button
-                        type="button"
-                        style={{
-                          ...styles.smallButton,
-                          background: "#fff7ed",
-                          color: "#9a3412",
-                        }}
-                        onClick={() =>
-                          reintentarSincronizacion(pedido)
-                        }
-                      >
-                        Reintentar sincronización
                       </button>
                     )}
 

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabase";
 
 type Seccion =
@@ -3924,7 +3923,7 @@ function Productos({
     if (!archivoSeleccionado) return;
 
     try {
-
+      const XLSX = await import("xlsx");
       const buffer = await archivoSeleccionado.arrayBuffer();
       const libro = XLSX.read(buffer, {
         type: "array",
@@ -3975,7 +3974,7 @@ function Productos({
   }
 
   async function descargarPlantillaProductos() {
-
+    const XLSX = await import("xlsx");
     const filasEjemplo = [
       {
         Nombre: "Producto de ejemplo",

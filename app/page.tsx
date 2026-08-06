@@ -6563,7 +6563,7 @@ function ProveedoresRemitos({
     lineas.forEach((linea) => {
       if (palabrasNoProducto.test(linea)) return;
 
-      const coincidencias = [...linea.matchAll(patronNumero)];
+      const coincidencias = Array.from(linea.matchAll(patronNumero));
       if (coincidencias.length < 2) return;
 
       const valores = coincidencias.map((coincidencia) =>
@@ -6790,14 +6790,14 @@ function ProveedoresRemitos({
             histograma[gris] += 1;
           }
 
-          function obtenerPercentil(porcentaje: number) {
+          const obtenerPercentil = (porcentaje: number) => {
             const objetivo = cantidadPixeles * porcentaje;
             let acumulado = 0;
 
             for (let valor = 0; valor < histograma.length; valor += 1) {
               acumulado += histograma[valor];
               if (acumulado >= objetivo) return valor;
-            }
+            };
 
             return 255;
           }

@@ -12,6 +12,7 @@ type Seccion =
   | "pedidos"
   | "caja"
   | "clientes"
+  | "proveedores"
   | "gastos"
   | "reportes"
   | "capacitaciones";
@@ -99,6 +100,18 @@ const GRUPOS_PERMISOS: GrupoPermisos[] = [
     ],
   },
   {
+    titulo: "Proveedores y remitos",
+    permisos: [
+      { clave: "proveedores.ver", etiqueta: "Ver proveedores" },
+      { clave: "proveedores.crear", etiqueta: "Crear proveedores" },
+      { clave: "proveedores.editar", etiqueta: "Editar proveedores" },
+      { clave: "proveedores.eliminar", etiqueta: "Desactivar proveedores" },
+      { clave: "remitos.ver", etiqueta: "Ver remitos y compras" },
+      { clave: "remitos.crear", etiqueta: "Registrar remitos e ingresar stock" },
+      { clave: "remitos.pagar", etiqueta: "Registrar pagos de remitos" },
+    ],
+  },
+  {
     titulo: "Gastos",
     permisos: [
       { clave: "gastos.ver", etiqueta: "Ver gastos" },
@@ -136,7 +149,11 @@ type Producto = {
   id: number;
   comercioId: number;
   nombre: string;
+  // `codigo` se conserva como alias del código interno para compatibilidad.
   codigo: string;
+  codigoInterno: string;
+  codigoBarras: string;
+  codigoProveedor: string;
   categoria: string;
   precio: number;
   costo: number;
@@ -157,6 +174,14 @@ type IngresoStock = {
   usuarioId: string | null;
   emailUsuario: string;
   createdAt: string;
+};
+
+type LineaMovimientoStock = {
+  productoId: number;
+  nombre: string;
+  codigoBarras: string;
+  stockActual: number;
+  cantidad: number;
 };
 
 type Cliente = {
@@ -302,6 +327,91 @@ type Gasto = {
   observaciones: string;
 };
 
+type Proveedor = {
+  id: number;
+  comercioId: number;
+  nombre: string;
+  cuit: string;
+  telefono: string;
+  email: string;
+  direccion: string;
+  contacto: string;
+  observaciones: string;
+  activo: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type RemitoCompraItem = {
+  id: number;
+  productoId: number;
+  nombreProducto: string;
+  codigoProducto: string;
+  cantidad: number;
+  costoUnitario: number;
+  subtotal: number;
+};
+
+type RemitoCompra = {
+  id: number;
+  comercioId: number;
+  proveedorId: number;
+  proveedorNombre: string;
+  numero: string;
+  fecha: string;
+  estado: "borrador" | "confirmado" | "anulado";
+  medioPago: string;
+  pagado: boolean;
+  total: number;
+  observaciones: string;
+  gastoId: number | null;
+  createdAt: string;
+  items: RemitoCompraItem[];
+};
+
+type LineaRemitoFormulario = {
+  clave: string;
+  productoId: string;
+  productoNombre: string;
+  codigoProducto: string;
+  crearProductoAutomaticamente: boolean;
+  cantidad: string;
+  costoUnitario: string;
+  costoAnterior: number | null;
+  precioVentaActual: number | null;
+  variacionCostoPorcentaje: number | null;
+  precioVentaSugerido: number | null;
+};
+
+type CostoProveedorProducto = {
+  proveedorId: number;
+  productoId: number;
+  ultimoCosto: number;
+};
+
+
+type ItemDocumentoCompraEscaneado = {
+  codigo: string;
+  nombre: string;
+  cantidad: number;
+  costoUnitario: number;
+  subtotal: number;
+  confianza: number;
+};
+
+type DocumentoCompraEscaneado = {
+  tipoDocumento: "remito" | "factura" | "otro";
+  proveedorNombre: string;
+  proveedorCuit: string;
+  numero: string;
+  fecha: string;
+  pedido: string;
+  medioPago: string;
+  total: number;
+  observaciones: string;
+  items: ItemDocumentoCompraEscaneado[];
+};
+
 type Capacitacion = {
   id: number;
   titulo: string;
@@ -352,11 +462,16 @@ const cajaVacia = (comercioId = 0): Caja => ({
 });
 
 function normalizarProducto(data: any): Producto {
+  const codigoInterno = data.codigo_interno || data.codigo || "";
+
   return {
     id: data.id,
     comercioId: data.comercio_id,
     nombre: data.nombre,
-    codigo: data.codigo,
+    codigo: codigoInterno,
+    codigoInterno,
+    codigoBarras: data.codigo_barras || "",
+    codigoProveedor: data.codigo_proveedor || "",
     categoria: data.categoria,
     precio: Number(data.precio),
     costo: Number(data.costo),
@@ -1907,6 +2022,17 @@ export default function Home() {
             />
           )}
 
+          {seccion === "proveedores" && (
+            <ProveedoresRemitos
+              productos={productos}
+              comercioActual={comercioActual}
+              recargarDatos={cargarDatos}
+              rolUsuario={rolUsuario}
+              accesoTotalUsuario={accesoTotalUsuario}
+              permisosUsuario={permisosUsuario}
+            />
+          )}
+
           {seccion === "gastos" && (
             <Gastos
               gastos={gastos}
@@ -2934,6 +3060,7 @@ function Sidebar({
     { id: "ventas", label: "Ventas", icono: "↗" },
     { id: "pedidos", label: "Pedidos", icono: "▦" },
     { id: "caja", label: "Caja", icono: "▤" },
+    { id: "proveedores", label: "Proveedores", icono: "◫" },
     { id: "gastos", label: "Gastos", icono: "−" },
     { id: "reportes", label: "Reportes", icono: "▣" },
     { id: "capacitaciones", label: "Capacitaciones", icono: "✦" },
@@ -3000,6 +3127,18 @@ function Sidebar({
         "caja.registrar_movimiento",
         "ventas.crear",
         "ventas.anular",
+      ].some(tienePermiso);
+    }
+
+    if (id === "proveedores") {
+      return [
+        "proveedores.ver",
+        "proveedores.crear",
+        "proveedores.editar",
+        "proveedores.eliminar",
+        "remitos.ver",
+        "remitos.crear",
+        "remitos.pagar",
       ].some(tienePermiso);
     }
 
@@ -3484,6 +3623,27 @@ function Productos({
   const [cantidadIngresoStock, setCantidadIngresoStock] = useState("");
   const [observacionIngresoStock, setObservacionIngresoStock] = useState("");
   const [guardandoIngresoStock, setGuardandoIngresoStock] = useState(false);
+  const [productoParaCodigoBarras, setProductoParaCodigoBarras] =
+    useState<Producto | null>(null);
+  const [codigoBarrasAsignar, setCodigoBarrasAsignar] = useState("");
+  const [asignandoCodigoBarras, setAsignandoCodigoBarras] = useState(false);
+  const codigoBarrasAsignarRef = useRef<HTMLInputElement | null>(null);
+
+  const [mostrarStockLectora, setMostrarStockLectora] = useState(false);
+  const [tipoMovimientoStock, setTipoMovimientoStock] = useState<
+    "ingreso" | "salida"
+  >("ingreso");
+  const [codigoStockLectora, setCodigoStockLectora] = useState("");
+  const [lineasMovimientoStock, setLineasMovimientoStock] = useState<
+    LineaMovimientoStock[]
+  >([]);
+  const [observacionMovimientoStock, setObservacionMovimientoStock] =
+    useState("");
+  const [codigoStockDesconocido, setCodigoStockDesconocido] = useState("");
+  const [productoVincularStockId, setProductoVincularStockId] = useState("");
+  const [guardandoMovimientoStock, setGuardandoMovimientoStock] =
+    useState(false);
+  const codigoStockLectoraRef = useRef<HTMLInputElement | null>(null);
 
   // MIGRACION_PRODUCTOS_V1
   const [herramientaProductos, setHerramientaProductos] = useState<
@@ -3522,6 +3682,8 @@ function Productos({
   const [form, setForm] = useState({
     nombre: "",
     codigo: "",
+    codigoBarras: "",
+    codigoProveedor: "",
     categoria: "",
     precio: "",
     costo: "",
@@ -3533,6 +3695,8 @@ function Productos({
     setForm({
       nombre: "",
       codigo: "",
+      codigoBarras: "",
+      codigoProveedor: "",
       categoria: "",
       precio: "",
       costo: "",
@@ -3550,7 +3714,9 @@ function Productos({
 
     setForm({
       nombre: producto.nombre,
-      codigo: producto.codigo,
+      codigo: producto.codigoInterno,
+      codigoBarras: producto.codigoBarras,
+      codigoProveedor: producto.codigoProveedor,
       categoria: producto.categoria,
       precio: String(producto.precio),
       costo: String(producto.costo),
@@ -3562,22 +3728,33 @@ function Productos({
   function validarFormularioProducto() {
     return (
       form.nombre &&
-      form.codigo &&
       form.categoria &&
-      form.precio &&
-      form.costo &&
-      form.stock &&
-      form.minimo
+      form.precio !== "" &&
+      form.costo !== "" &&
+      form.stock !== "" &&
+      form.minimo !== ""
     );
   }
 
-  function codigoProductoYaExiste(codigoBuscado: string, ignorarId?: number) {
+  function codigoInternoYaExiste(codigoBuscado: string, ignorarId?: number) {
     const codigoNormalizado = codigoBuscado.trim().toLowerCase();
+    if (!codigoNormalizado) return false;
 
     return productos.some(
       (producto) =>
         producto.id !== ignorarId &&
-        producto.codigo.trim().toLowerCase() === codigoNormalizado,
+        producto.codigoInterno.trim().toLowerCase() === codigoNormalizado,
+    );
+  }
+
+  function codigoBarrasYaExiste(codigoBuscado: string, ignorarId?: number) {
+    const codigoNormalizado = codigoBuscado.trim().toLowerCase();
+    if (!codigoNormalizado) return false;
+
+    return productos.some(
+      (producto) =>
+        producto.id !== ignorarId &&
+        producto.codigoBarras.trim().toLowerCase() === codigoNormalizado,
     );
   }
 
@@ -3592,8 +3769,13 @@ function Productos({
       return;
     }
 
-    if (codigoProductoYaExiste(form.codigo)) {
-      alert("Ya existe otro producto con ese código de barras.");
+    if (codigoInternoYaExiste(form.codigo)) {
+      alert("Ya existe otro producto con ese código interno.");
+      return;
+    }
+
+    if (codigoBarrasYaExiste(form.codigoBarras)) {
+      alert("Ese código de barras ya está asignado a otro producto.");
       return;
     }
 
@@ -3603,6 +3785,9 @@ function Productos({
         comercio_id: comercioActual.id,
         nombre: form.nombre,
         codigo: form.codigo.trim(),
+        codigo_interno: form.codigo.trim(),
+        codigo_barras: form.codigoBarras.trim() || null,
+        codigo_proveedor: form.codigoProveedor.trim() || null,
         categoria: form.categoria,
         precio: Number(form.precio),
         costo: Number(form.costo),
@@ -3638,8 +3823,13 @@ function Productos({
       return;
     }
 
-    if (codigoProductoYaExiste(form.codigo, productoEditando.id)) {
-      alert("Ya existe otro producto con ese código de barras.");
+    if (codigoInternoYaExiste(form.codigo, productoEditando.id)) {
+      alert("Ya existe otro producto con ese código interno.");
+      return;
+    }
+
+    if (codigoBarrasYaExiste(form.codigoBarras, productoEditando.id)) {
+      alert("Ese código de barras ya está asignado a otro producto.");
       return;
     }
 
@@ -3648,6 +3838,9 @@ function Productos({
       .update({
         nombre: form.nombre,
         codigo: form.codigo.trim(),
+        codigo_interno: form.codigo.trim(),
+        codigo_barras: form.codigoBarras.trim() || null,
+        codigo_proveedor: form.codigoProveedor.trim() || null,
         categoria: form.categoria,
         precio: Number(form.precio),
         costo: Number(form.costo),
@@ -3673,6 +3866,261 @@ function Productos({
     );
 
     limpiarFormulario();
+  }
+
+  function iniciarAsignacionCodigoBarras(producto: Producto) {
+    setProductoParaCodigoBarras(producto);
+    setCodigoBarrasAsignar(producto.codigoBarras || "");
+    requestAnimationFrame(() => codigoBarrasAsignarRef.current?.focus());
+  }
+
+  function cancelarAsignacionCodigoBarras() {
+    if (asignandoCodigoBarras) return;
+    setProductoParaCodigoBarras(null);
+    setCodigoBarrasAsignar("");
+  }
+
+  async function confirmarAsignacionCodigoBarras() {
+    if (!productoParaCodigoBarras) return;
+
+    const codigo = codigoBarrasAsignar.trim();
+    if (!codigo) {
+      alert("Escaneá o ingresá el código de barras.");
+      return;
+    }
+
+    if (codigoBarrasYaExiste(codigo, productoParaCodigoBarras.id)) {
+      alert("Ese código de barras ya está asignado a otro producto.");
+      return;
+    }
+
+    setAsignandoCodigoBarras(true);
+    const { error } = await supabase.rpc("asignar_codigo_barras_producto", {
+      p_producto_id: productoParaCodigoBarras.id,
+      p_codigo_barras: codigo,
+    });
+    setAsignandoCodigoBarras(false);
+
+    if (error) {
+      alert("No se pudo asignar el código de barras: " + error.message);
+      return;
+    }
+
+    setProductoParaCodigoBarras(null);
+    setCodigoBarrasAsignar("");
+    await recargarDatos();
+    alert("Código de barras asignado correctamente.");
+  }
+
+  function abrirStockConLectora() {
+    setMostrarStockLectora(true);
+    setCodigoStockLectora("");
+    setCodigoStockDesconocido("");
+    setProductoVincularStockId("");
+    requestAnimationFrame(() => codigoStockLectoraRef.current?.focus());
+  }
+
+  function cerrarStockConLectora() {
+    if (guardandoMovimientoStock) return;
+    setMostrarStockLectora(false);
+    setCodigoStockLectora("");
+    setLineasMovimientoStock([]);
+    setObservacionMovimientoStock("");
+    setCodigoStockDesconocido("");
+    setProductoVincularStockId("");
+    setTipoMovimientoStock("ingreso");
+  }
+
+  function buscarProductoPorCodigoStock(codigoBuscado: string) {
+    const codigo = codigoBuscado.trim().toLowerCase();
+    if (!codigo) return null;
+
+    return (
+      productos.find(
+        (producto) =>
+          producto.activo &&
+          producto.codigoBarras.trim().toLowerCase() === codigo,
+      ) ||
+      productos.find(
+        (producto) =>
+          producto.activo &&
+          producto.codigoInterno.trim().toLowerCase() === codigo,
+      ) ||
+      productos.find(
+        (producto) =>
+          producto.activo &&
+          producto.codigoProveedor.trim().toLowerCase() === codigo,
+      ) ||
+      null
+    );
+  }
+
+  function agregarProductoAMovimientoStock(producto: Producto) {
+    setLineasMovimientoStock((actuales) => {
+      const existente = actuales.find(
+        (linea) => linea.productoId === producto.id,
+      );
+
+      if (existente) {
+        return actuales.map((linea) =>
+          linea.productoId === producto.id
+            ? { ...linea, cantidad: linea.cantidad + 1 }
+            : linea,
+        );
+      }
+
+      return [
+        ...actuales,
+        {
+          productoId: producto.id,
+          nombre: producto.nombre,
+          codigoBarras: producto.codigoBarras,
+          stockActual: producto.stock,
+          cantidad: 1,
+        },
+      ];
+    });
+  }
+
+  function procesarCodigoStockLectora() {
+    const codigo = codigoStockLectora.trim();
+    if (!codigo) return;
+
+    const producto = buscarProductoPorCodigoStock(codigo);
+
+    if (!producto) {
+      setCodigoStockDesconocido(codigo);
+      setProductoVincularStockId("");
+      setCodigoStockLectora("");
+      return;
+    }
+
+    agregarProductoAMovimientoStock(producto);
+    setCodigoStockLectora("");
+    setCodigoStockDesconocido("");
+    setProductoVincularStockId("");
+    requestAnimationFrame(() => codigoStockLectoraRef.current?.focus());
+  }
+
+  function actualizarCantidadMovimientoStock(
+    productoId: number,
+    cantidadTexto: string,
+  ) {
+    const cantidad = Math.max(1, Math.trunc(Number(cantidadTexto) || 1));
+    setLineasMovimientoStock((actuales) =>
+      actuales.map((linea) =>
+        linea.productoId === productoId ? { ...linea, cantidad } : linea,
+      ),
+    );
+  }
+
+  function quitarLineaMovimientoStock(productoId: number) {
+    setLineasMovimientoStock((actuales) =>
+      actuales.filter((linea) => linea.productoId !== productoId),
+    );
+  }
+
+  async function vincularCodigoDesconocidoStock() {
+    const productoId = Number(productoVincularStockId);
+    const producto = productos.find((item) => item.id === productoId);
+
+    if (!codigoStockDesconocido || !producto) {
+      alert("Elegí el producto al que corresponde el código escaneado.");
+      return;
+    }
+
+    if (codigoBarrasYaExiste(codigoStockDesconocido, producto.id)) {
+      alert("Ese código de barras ya está vinculado a otro producto.");
+      return;
+    }
+
+    setAsignandoCodigoBarras(true);
+    const { error } = await supabase.rpc("asignar_codigo_barras_producto", {
+      p_producto_id: producto.id,
+      p_codigo_barras: codigoStockDesconocido,
+    });
+    setAsignandoCodigoBarras(false);
+
+    if (error) {
+      alert("No se pudo vincular el código: " + error.message);
+      return;
+    }
+
+    agregarProductoAMovimientoStock({
+      ...producto,
+      codigoBarras: codigoStockDesconocido,
+    });
+    setCodigoStockDesconocido("");
+    setProductoVincularStockId("");
+    setCodigoStockLectora("");
+    await recargarDatos();
+    requestAnimationFrame(() => codigoStockLectoraRef.current?.focus());
+  }
+
+  async function confirmarMovimientoStockLectora() {
+    if (!comercioActual) {
+      alert("No hay comercio asociado.");
+      return;
+    }
+
+    if (lineasMovimientoStock.length === 0) {
+      alert("Escaneá al menos un producto.");
+      return;
+    }
+
+    const lineaInvalida = lineasMovimientoStock.find(
+      (linea) => !Number.isInteger(linea.cantidad) || linea.cantidad <= 0,
+    );
+
+    if (lineaInvalida) {
+      alert(`Revisá la cantidad de ${lineaInvalida.nombre}.`);
+      return;
+    }
+
+    if (tipoMovimientoStock === "salida") {
+      const sinStock = lineasMovimientoStock.find(
+        (linea) => linea.cantidad > linea.stockActual,
+      );
+
+      if (sinStock) {
+        alert(
+          `${sinStock.nombre} tiene ${sinStock.stockActual} unidades y no se pueden retirar ${sinStock.cantidad}.`,
+        );
+        return;
+      }
+    }
+
+    setGuardandoMovimientoStock(true);
+    const { data, error } = await supabase.rpc(
+      "registrar_movimientos_stock_lote",
+      {
+        p_comercio_id: comercioActual.id,
+        p_tipo: tipoMovimientoStock,
+        p_items: lineasMovimientoStock.map((linea) => ({
+          producto_id: linea.productoId,
+          cantidad: linea.cantidad,
+        })),
+        p_observacion: observacionMovimientoStock.trim() || null,
+      },
+    );
+    setGuardandoMovimientoStock(false);
+
+    if (error) {
+      alert("No se pudo modificar el stock: " + error.message);
+      return;
+    }
+
+    const cantidadProcesada = Number(data?.productos_procesados || 0);
+    setLineasMovimientoStock([]);
+    setObservacionMovimientoStock("");
+    setCodigoStockLectora("");
+    setCodigoStockDesconocido("");
+    setProductoVincularStockId("");
+    await recargarDatos();
+    requestAnimationFrame(() => codigoStockLectoraRef.current?.focus());
+    alert(
+      `${cantidadProcesada || "Los"} productos fueron actualizados correctamente.`,
+    );
   }
 
   function iniciarIngresoStock(producto: Producto) {
@@ -4279,6 +4727,21 @@ function Productos({
             >
               Cambiar precios
             </button>
+            <button
+              type="button"
+              style={styles.smallButtonAlt}
+              onClick={() => {
+                if (mostrarStockLectora) {
+                  cerrarStockConLectora();
+                } else {
+                  abrirStockConLectora();
+                }
+              }}
+            >
+              {mostrarStockLectora
+                ? "Cerrar stock con lectora"
+                : "Stock con lectora"}
+            </button>
             <Button
               onClick={() => {
                 if (mostrarFormulario) {
@@ -4289,6 +4752,8 @@ function Productos({
                   setForm({
                     nombre: "",
                     codigo: "",
+                    codigoBarras: "",
+                    codigoProveedor: "",
                     categoria: "",
                     precio: "",
                     costo: "",
@@ -4303,6 +4768,246 @@ function Productos({
           </div>
         }
       />
+
+      {mostrarStockLectora && (
+        <Panel title="Modificar stock con lectora">
+          <p style={{ ...styles.text, marginTop: 0 }}>
+            Escaneá productos uno detrás de otro. Si repetís un código, la
+            cantidad aumenta en una unidad. Nada se modifica hasta confirmar.
+          </p>
+
+          <div className="app-form-grid-small" style={styles.formGridSmall}>
+            <div>
+              <label
+                style={{ display: "block", fontWeight: 700, marginBottom: 6 }}
+              >
+                Tipo de movimiento
+              </label>
+              <select
+                value={tipoMovimientoStock}
+                onChange={(event) =>
+                  setTipoMovimientoStock(
+                    event.target.value as "ingreso" | "salida",
+                  )
+                }
+                style={{
+                  width: "100%",
+                  padding: 12,
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 10,
+                  background: "#fff",
+                }}
+              >
+                <option value="ingreso">Ingreso de mercadería</option>
+                <option value="salida">Salida o corrección de stock</option>
+              </select>
+            </div>
+
+            <div>
+              <label
+                style={{ display: "block", fontWeight: 700, marginBottom: 6 }}
+              >
+                Código de barras
+              </label>
+              <input
+                ref={codigoStockLectoraRef}
+                value={codigoStockLectora}
+                onChange={(event) => setCodigoStockLectora(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    procesarCodigoStockLectora();
+                  }
+                }}
+                placeholder="Escaneá el producto y presioná Enter"
+                className="app-input"
+                style={styles.input}
+                autoComplete="off"
+              />
+            </div>
+
+            <div style={{ display: "flex", alignItems: "flex-end" }}>
+              <Button onClick={procesarCodigoStockLectora}>
+                Agregar producto
+              </Button>
+            </div>
+          </div>
+
+          {codigoStockDesconocido && (
+            <div
+              style={{
+                marginTop: 16,
+                padding: 14,
+                border: "1px solid #f59e0b",
+                borderRadius: 12,
+                background: "#fffbeb",
+              }}
+            >
+              <strong>Código no registrado: {codigoStockDesconocido}</strong>
+              <p style={{ ...styles.text, marginBottom: 10 }}>
+                Elegí un producto existente para vincularle este código. Así la
+                próxima lectura se reconocerá automáticamente.
+              </p>
+              <div className="app-form-grid-small" style={styles.formGridSmall}>
+                <select
+                  value={productoVincularStockId}
+                  onChange={(event) =>
+                    setProductoVincularStockId(event.target.value)
+                  }
+                  style={{
+                    width: "100%",
+                    padding: 12,
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 10,
+                    background: "#fff",
+                  }}
+                >
+                  <option value="">Seleccionar producto</option>
+                  {productos
+                    .filter((producto) => producto.activo)
+                    .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))
+                    .map((producto) => (
+                      <option key={producto.id} value={producto.id}>
+                        {producto.nombre} · Stock {producto.stock}
+                      </option>
+                    ))}
+                </select>
+                <Button
+                  onClick={vincularCodigoDesconocidoStock}
+                  disabled={asignandoCodigoBarras}
+                >
+                  {asignandoCodigoBarras
+                    ? "Vinculando..."
+                    : "Vincular y agregar"}
+                </Button>
+                <SecondaryButton
+                  onClick={() => {
+                    setCodigoStockDesconocido("");
+                    setProductoVincularStockId("");
+                    requestAnimationFrame(() =>
+                      codigoStockLectoraRef.current?.focus(),
+                    );
+                  }}
+                >
+                  Cancelar
+                </SecondaryButton>
+              </div>
+            </div>
+          )}
+
+          {lineasMovimientoStock.length === 0 ? (
+            <Empty text="Todavía no escaneaste productos." />
+          ) : (
+            <>
+              <Table>
+                <thead style={styles.thead}>
+                  <tr>
+                    <Th>Producto</Th>
+                    <Th>Código</Th>
+                    <Th>Stock actual</Th>
+                    <Th>Cantidad</Th>
+                    <Th>Stock resultante</Th>
+                    <Th>Acción</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lineasMovimientoStock.map((linea) => {
+                    const stockResultante =
+                      tipoMovimientoStock === "ingreso"
+                        ? linea.stockActual + linea.cantidad
+                        : linea.stockActual - linea.cantidad;
+                    const stockInsuficiente = stockResultante < 0;
+
+                    return (
+                      <tr key={linea.productoId} style={styles.tr}>
+                        <Td>{linea.nombre}</Td>
+                        <Td>{linea.codigoBarras || "Código interno"}</Td>
+                        <Td>{linea.stockActual}</Td>
+                        <Td>
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={linea.cantidad}
+                            onChange={(event) =>
+                              actualizarCantidadMovimientoStock(
+                                linea.productoId,
+                                event.target.value,
+                              )
+                            }
+                            style={{ ...styles.input, maxWidth: 110 }}
+                          />
+                        </Td>
+                        <Td>
+                          <strong
+                            style={{ color: stockInsuficiente ? "#b91c1c" : undefined }}
+                          >
+                            {stockResultante}
+                          </strong>
+                          {stockInsuficiente && (
+                            <div style={{ color: "#b91c1c", fontSize: 12 }}>
+                              Stock insuficiente
+                            </div>
+                          )}
+                        </Td>
+                        <Td>
+                          <button
+                            type="button"
+                            style={{
+                              ...styles.smallButton,
+                              background: "#fee2e2",
+                              color: "#991b1b",
+                            }}
+                            onClick={() =>
+                              quitarLineaMovimientoStock(linea.productoId)
+                            }
+                          >
+                            Quitar
+                          </button>
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+
+              <div style={{ marginTop: 14 }}>
+                <Input
+                  placeholder={
+                    tipoMovimientoStock === "ingreso"
+                      ? "Motivo u observación (ej.: reposición de mercadería)"
+                      : "Motivo obligatorio recomendado (ej.: rotura, devolución o corrección)"
+                  }
+                  value={observacionMovimientoStock}
+                  onChange={setObservacionMovimientoStock}
+                />
+              </div>
+
+              <div className="app-actions" style={styles.actions}>
+                <Button
+                  onClick={confirmarMovimientoStockLectora}
+                  disabled={guardandoMovimientoStock}
+                >
+                  {guardandoMovimientoStock
+                    ? "Actualizando stock..."
+                    : `Confirmar ${
+                        tipoMovimientoStock === "ingreso" ? "ingreso" : "salida"
+                      } de ${lineasMovimientoStock.length} productos`}
+                </Button>
+                <SecondaryButton
+                  onClick={() => {
+                    if (!guardandoMovimientoStock) {
+                      setLineasMovimientoStock([]);
+                    }
+                  }}
+                >
+                  Vaciar lista
+                </SecondaryButton>
+              </div>
+            </>
+          )}
+        </Panel>
+      )}
 
       {herramientaProductos === "importar" && (
         <Panel title="Importar o migrar productos">
@@ -4753,9 +5458,21 @@ function Productos({
             />
 
             <Input
-              placeholder="Código de barras o código interno"
+              placeholder="Código interno (opcional, se genera solo)"
               value={form.codigo}
               onChange={(v) => setForm({ ...form, codigo: v })}
+            />
+
+            <Input
+              placeholder="Código de barras (podés asignarlo después)"
+              value={form.codigoBarras}
+              onChange={(v) => setForm({ ...form, codigoBarras: v })}
+            />
+
+            <Input
+              placeholder="Código del proveedor (opcional)"
+              value={form.codigoProveedor}
+              onChange={(v) => setForm({ ...form, codigoProveedor: v })}
             />
 
             <Input
@@ -4807,11 +5524,48 @@ function Productos({
         </Panel>
       )}
 
+      {productoParaCodigoBarras && (
+        <Panel title={`Asignar código de barras · ${productoParaCodigoBarras.nombre}`}>
+          <p style={styles.text}>
+            Escaneá físicamente el producto. El código quedará vinculado sin cambiar
+            su código interno ni el código del proveedor.
+          </p>
+          <div className="app-form-grid-small" style={styles.formGridSmall}>
+            <input
+              ref={codigoBarrasAsignarRef}
+              value={codigoBarrasAsignar}
+              onChange={(event) => setCodigoBarrasAsignar(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  confirmarAsignacionCodigoBarras();
+                }
+              }}
+              placeholder="Escaneá o ingresá el código de barras"
+              className="app-input"
+              style={styles.input}
+              autoComplete="off"
+            />
+            <Button
+              onClick={confirmarAsignacionCodigoBarras}
+              disabled={asignandoCodigoBarras}
+            >
+              {asignandoCodigoBarras ? "Asignando..." : "Guardar código"}
+            </Button>
+            <SecondaryButton onClick={cancelarAsignacionCodigoBarras}>
+              Cancelar
+            </SecondaryButton>
+          </div>
+        </Panel>
+      )}
+
       <Table>
         <thead style={styles.thead}>
           <tr>
             <Th>Producto</Th>
-            <Th>Código</Th>
+            <Th>Código de barras</Th>
+            <Th>Código interno</Th>
+            <Th>Código proveedor</Th>
             <Th>Categoría</Th>
             <Th>Precio</Th>
             <Th>Costo</Th>
@@ -4828,7 +5582,15 @@ function Productos({
             return (
               <tr key={producto.id} style={styles.tr}>
                 <Td>{producto.nombre}</Td>
-                <Td>{producto.codigo}</Td>
+                <Td>
+                  {producto.codigoBarras ? (
+                    producto.codigoBarras
+                  ) : (
+                    <Badge danger>Pendiente</Badge>
+                  )}
+                </Td>
+                <Td>{producto.codigoInterno}</Td>
+                <Td>{producto.codigoProveedor || "—"}</Td>
                 <Td>{producto.categoria}</Td>
                 <Td>{money(producto.precio)}</Td>
                 <Td>{money(producto.costo)}</Td>
@@ -4849,6 +5611,13 @@ function Productos({
                       onClick={() => iniciarIngresoStock(producto)}
                     >
                       + Stock
+                    </button>
+
+                    <button
+                      style={styles.smallButtonAlt}
+                      onClick={() => iniciarAsignacionCodigoBarras(producto)}
+                    >
+                      {producto.codigoBarras ? "Cambiar código" : "Asignar código"}
                     </button>
 
                     <button
@@ -4876,9 +5645,9 @@ function Productos({
         </tbody>
       </Table>
 
-      <Panel title="Historial de ingresos de stock">
+      <Panel title="Historial de movimientos de stock">
         {ingresosStock.length === 0 ? (
-          <Empty text="Todavía no hay ingresos de mercadería registrados." />
+          <Empty text="Todavía no hay movimientos de stock registrados." />
         ) : (
           ingresosStock.map((ingreso) => (
             <div key={ingreso.id} className="app-stock-history-item" style={styles.stockHistoryItem}>
@@ -4893,7 +5662,10 @@ function Productos({
                 </p>
               </div>
               <div style={styles.stockHistoryNumbers}>
-                <strong>+{ingreso.cantidad}</strong>
+                <strong>
+                  {ingreso.cantidad > 0 ? "+" : ""}
+                  {ingreso.cantidad}
+                </strong>
                 <span>
                   {ingreso.stockAnterior} → {ingreso.stockResultante}
                 </span>
@@ -4952,6 +5724,2839 @@ function Productos({
     </>
   );
 }
+
+function ProveedoresRemitos({
+  productos,
+  comercioActual,
+  recargarDatos,
+  rolUsuario,
+  accesoTotalUsuario,
+  permisosUsuario,
+}: {
+  productos: Producto[];
+  comercioActual: Comercio | null;
+  recargarDatos: () => Promise<void>;
+  rolUsuario: string;
+  accesoTotalUsuario: boolean;
+  permisosUsuario: Record<string, boolean>;
+}) {
+  const fechaLocal = new Date(
+    Date.now() - new Date().getTimezoneOffset() * 60_000,
+  )
+    .toISOString()
+    .slice(0, 10);
+
+  const [pestana, setPestana] = useState<"proveedores" | "remitos">(
+    "proveedores",
+  );
+  const [proveedores, setProveedores] = useState<Proveedor[]>([]);
+  const [remitos, setRemitos] = useState<RemitoCompra[]>([]);
+  const [costosProveedorProductos, setCostosProveedorProductos] = useState<
+    CostoProveedorProducto[]
+  >([]);
+  const [cargando, setCargando] = useState(false);
+  const [guardandoProveedor, setGuardandoProveedor] = useState(false);
+  const [registrandoRemito, setRegistrandoRemito] = useState(false);
+  const [archivoDocumento, setArchivoDocumento] = useState<File | null>(null);
+  const [analizandoDocumento, setAnalizandoDocumento] = useState(false);
+  const [progresoEscaneo, setProgresoEscaneo] = useState(0);
+  const [textoOcr, setTextoOcr] = useState("");
+  const [vistaPreviaOcr, setVistaPreviaOcr] = useState("");
+  const [documentoEscaneado, setDocumentoEscaneado] =
+    useState<DocumentoCompraEscaneado | null>(null);
+  const [pasoRemito, setPasoRemito] = useState<1 | 2 | 3>(1);
+  const [advertenciasEscaneo, setAdvertenciasEscaneo] = useState<string[]>([]);
+  const [proveedorEditando, setProveedorEditando] =
+    useState<Proveedor | null>(null);
+  const [mostrarFormularioProveedor, setMostrarFormularioProveedor] =
+    useState(false);
+
+  const [formProveedor, setFormProveedor] = useState({
+    nombre: "",
+    cuit: "",
+    telefono: "",
+    email: "",
+    direccion: "",
+    contacto: "",
+    observaciones: "",
+  });
+
+  const [formRemito, setFormRemito] = useState({
+    tipoDocumento: "remito" as "remito" | "factura" | "otro",
+    proveedorId: "",
+    crearProveedorAutomaticamente: false,
+    proveedorNombreNuevo: "",
+    proveedorCuitNuevo: "",
+    numero: "",
+    fecha: fechaLocal,
+    pedido: "",
+    totalDocumentoDetectado: "",
+    medioPago: "Cuenta corriente",
+    pagado: false,
+    observaciones: "",
+  });
+
+  const crearLineaVacia = (): LineaRemitoFormulario => ({
+    clave: `${Date.now()}-${Math.random()}`,
+    productoId: "",
+    productoNombre: "",
+    codigoProducto: "",
+    crearProductoAutomaticamente: false,
+    cantidad: "1",
+    costoUnitario: "",
+    costoAnterior: null,
+    precioVentaActual: null,
+    variacionCostoPorcentaje: null,
+    precioVentaSugerido: null,
+  });
+
+  const [lineasRemito, setLineasRemito] = useState<LineaRemitoFormulario[]>([
+    crearLineaVacia(),
+  ]);
+
+  const esAdministrador =
+    rolUsuario === "admin_comercio" || rolUsuario === "admin_secretaria";
+
+  function tienePermiso(clave: string) {
+    return (
+      esAdministrador ||
+      accesoTotalUsuario ||
+      Boolean(permisosUsuario[clave])
+    );
+  }
+
+  const puedeCrearProveedor = tienePermiso("proveedores.crear");
+  const puedeEditarProveedor = tienePermiso("proveedores.editar");
+  const puedeDesactivarProveedor = tienePermiso("proveedores.eliminar");
+  const puedeCrearRemito = tienePermiso("remitos.crear");
+  const puedePagarRemito = tienePermiso("remitos.pagar");
+
+  const totalRemito = useMemo(
+    () =>
+      lineasRemito.reduce(
+        (total, linea) =>
+          total +
+          Math.max(0, Number(linea.cantidad) || 0) *
+            Math.max(0, Number(linea.costoUnitario) || 0),
+        0,
+      ),
+    [lineasRemito],
+  );
+
+  const aumentosCostoDetectados = useMemo(
+    () =>
+      lineasRemito.filter(
+        (linea) =>
+          linea.variacionCostoPorcentaje !== null &&
+          linea.variacionCostoPorcentaje > 0,
+      ),
+    [lineasRemito],
+  );
+
+  const proveedorDocumentoValido =
+    Boolean(formRemito.proveedorId) ||
+    (formRemito.crearProveedorAutomaticamente &&
+      Boolean(
+        formRemito.proveedorNombreNuevo.trim() ||
+          formRemito.proveedorCuitNuevo.trim(),
+      ));
+
+  const numeroDocumentoNormalizado = formRemito.numero
+    .replace(/\s+/g, "")
+    .toLowerCase();
+
+  const proveedorResueltoParaDuplicado = formRemito.proveedorId
+    ? Number(formRemito.proveedorId)
+    : buscarProveedorPorDatosFormulario();
+
+  const documentoDuplicadoDetectado = Boolean(
+    proveedorResueltoParaDuplicado &&
+      numeroDocumentoNormalizado &&
+      remitos.some(
+        (remito) =>
+          remito.proveedorId === proveedorResueltoParaDuplicado &&
+          remito.numero.replace(/\s+/g, "").toLowerCase() ===
+            numeroDocumentoNormalizado,
+      ),
+  );
+
+  const datosDocumentoCompletos = Boolean(
+    proveedorDocumentoValido &&
+      formRemito.numero.trim() &&
+      formRemito.fecha &&
+      !documentoDuplicadoDetectado,
+  );
+
+  const lineasProductoPendientes = lineasRemito.filter(
+    (linea) =>
+      !(
+        (linea.productoId ||
+          (linea.crearProductoAutomaticamente &&
+            linea.productoNombre.trim())) &&
+        Number(linea.cantidad) > 0 &&
+        Number(linea.costoUnitario) >= 0
+      ),
+  ).length;
+
+  const productosNuevosEnRevision = lineasRemito.filter(
+    (linea) => linea.crearProductoAutomaticamente,
+  ).length;
+
+  const productosSinCostoEnRevision = lineasRemito.filter(
+    (linea) => Number(linea.costoUnitario) <= 0,
+  ).length;
+
+  const deudaPendiente = remitos
+    .filter((remito) => !remito.pagado && remito.estado === "confirmado")
+    .reduce((total, remito) => total + remito.total, 0);
+
+  useEffect(() => {
+    if (!comercioActual?.id) return;
+    cargarProveedoresYRemitos();
+  }, [comercioActual?.id]);
+
+  useEffect(() => {
+    const comercioId = comercioActual?.id;
+    if (!comercioId) return;
+
+    const canal = supabase
+      .channel(`proveedores-remitos-${comercioId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "proveedores",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        cargarProveedoresYRemitos,
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "remitos_compra",
+          filter: `comercio_id=eq.${comercioId}`,
+        },
+        cargarProveedoresYRemitos,
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(canal);
+    };
+  }, [comercioActual?.id]);
+
+  async function cargarProveedoresYRemitos() {
+    if (!comercioActual) return;
+
+    setCargando(true);
+
+    const [
+      proveedoresRespuesta,
+      remitosRespuesta,
+      costosProveedorRespuesta,
+    ] = await Promise.all([
+      supabase
+        .from("proveedores")
+        .select("*")
+        .eq("comercio_id", comercioActual.id)
+        .order("activo", { ascending: false })
+        .order("nombre", { ascending: true }),
+      supabase
+        .from("remitos_compra")
+        .select(
+          `
+          *,
+          proveedores (nombre),
+          remito_compra_items (
+            id,
+            producto_id,
+            nombre_producto,
+            codigo_producto,
+            cantidad,
+            costo_unitario,
+            subtotal
+          )
+        `,
+        )
+        .eq("comercio_id", comercioActual.id)
+        .order("fecha", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(150),
+      supabase
+        .from("proveedores_productos")
+        .select("proveedor_id, producto_id, ultimo_costo")
+        .eq("comercio_id", comercioActual.id),
+    ]);
+
+    if (proveedoresRespuesta.error) {
+      console.error(
+        "Error al cargar proveedores:",
+        proveedoresRespuesta.error,
+      );
+      alert(
+        "No se pudieron cargar los proveedores: " +
+          proveedoresRespuesta.error.message,
+      );
+    } else {
+      setProveedores(
+        (proveedoresRespuesta.data || []).map((item: any) => ({
+          id: Number(item.id),
+          comercioId: Number(item.comercio_id),
+          nombre: item.nombre || "Proveedor",
+          cuit: item.cuit || "",
+          telefono: item.telefono || "",
+          email: item.email || "",
+          direccion: item.direccion || "",
+          contacto: item.contacto || "",
+          observaciones: item.observaciones || "",
+          activo: Boolean(item.activo),
+          createdAt: item.created_at,
+          updatedAt: item.updated_at,
+        })),
+      );
+    }
+
+    if (remitosRespuesta.error) {
+      console.error("Error al cargar remitos:", remitosRespuesta.error);
+      alert(
+        "No se pudieron cargar los remitos: " +
+          remitosRespuesta.error.message,
+      );
+    } else {
+      setRemitos(
+        (remitosRespuesta.data || []).map((item: any) => {
+          const proveedorRelacion: any = Array.isArray(item.proveedores)
+            ? item.proveedores[0]
+            : item.proveedores;
+
+          return {
+            id: Number(item.id),
+            comercioId: Number(item.comercio_id),
+            proveedorId: Number(item.proveedor_id),
+            proveedorNombre: proveedorRelacion?.nombre || "Proveedor",
+            numero: item.numero || "",
+            fecha: item.fecha,
+            estado: item.estado || "confirmado",
+            medioPago: item.medio_pago || "",
+            pagado: Boolean(item.pagado),
+            total: Number(item.total || 0),
+            observaciones: item.observaciones || "",
+            gastoId: item.gasto_id ? Number(item.gasto_id) : null,
+            createdAt: item.created_at,
+            items: (item.remito_compra_items || []).map((detalle: any) => ({
+              id: Number(detalle.id),
+              productoId: Number(detalle.producto_id),
+              nombreProducto: detalle.nombre_producto || "Producto",
+              codigoProducto: detalle.codigo_producto || "",
+              cantidad: Number(detalle.cantidad || 0),
+              costoUnitario: Number(detalle.costo_unitario || 0),
+              subtotal: Number(detalle.subtotal || 0),
+            })),
+          } as RemitoCompra;
+        }),
+      );
+    }
+
+    if (costosProveedorRespuesta.error) {
+      console.error(
+        "Error al cargar costos por proveedor:",
+        costosProveedorRespuesta.error,
+      );
+      setCostosProveedorProductos([]);
+    } else {
+      setCostosProveedorProductos(
+        (costosProveedorRespuesta.data || []).map((item: any) => ({
+          proveedorId: Number(item.proveedor_id),
+          productoId: Number(item.producto_id),
+          ultimoCosto: Number(item.ultimo_costo || 0),
+        })),
+      );
+    }
+
+    setCargando(false);
+  }
+
+  function limpiarProveedor() {
+    setFormProveedor({
+      nombre: "",
+      cuit: "",
+      telefono: "",
+      email: "",
+      direccion: "",
+      contacto: "",
+      observaciones: "",
+    });
+    setProveedorEditando(null);
+    setMostrarFormularioProveedor(false);
+  }
+
+  function editarProveedor(proveedor: Proveedor) {
+    setProveedorEditando(proveedor);
+    setFormProveedor({
+      nombre: proveedor.nombre,
+      cuit: proveedor.cuit,
+      telefono: proveedor.telefono,
+      email: proveedor.email,
+      direccion: proveedor.direccion,
+      contacto: proveedor.contacto,
+      observaciones: proveedor.observaciones,
+    });
+    setMostrarFormularioProveedor(true);
+  }
+
+  async function guardarProveedor() {
+    if (!comercioActual || !formProveedor.nombre.trim()) {
+      alert("Ingresá el nombre del proveedor.");
+      return;
+    }
+
+    setGuardandoProveedor(true);
+
+    const datos = {
+      comercio_id: comercioActual.id,
+      nombre: formProveedor.nombre.trim(),
+      cuit: formProveedor.cuit.trim(),
+      telefono: formProveedor.telefono.trim(),
+      email: formProveedor.email.trim().toLowerCase(),
+      direccion: formProveedor.direccion.trim(),
+      contacto: formProveedor.contacto.trim(),
+      observaciones: formProveedor.observaciones.trim(),
+    };
+
+    const respuesta = proveedorEditando
+      ? await supabase
+          .from("proveedores")
+          .update(datos)
+          .eq("id", proveedorEditando.id)
+          .eq("comercio_id", comercioActual.id)
+      : await supabase.from("proveedores").insert(datos);
+
+    setGuardandoProveedor(false);
+
+    if (respuesta.error) {
+      alert("No se pudo guardar el proveedor: " + respuesta.error.message);
+      return;
+    }
+
+    limpiarProveedor();
+    await cargarProveedoresYRemitos();
+  }
+
+  async function cambiarEstadoProveedor(proveedor: Proveedor) {
+    if (!comercioActual) return;
+
+    const accion = proveedor.activo ? "desactivar" : "reactivar";
+    if (!confirm(`¿Querés ${accion} a ${proveedor.nombre}?`)) return;
+
+    const { error } = await supabase
+      .from("proveedores")
+      .update({ activo: !proveedor.activo })
+      .eq("id", proveedor.id)
+      .eq("comercio_id", comercioActual.id);
+
+    if (error) {
+      alert("No se pudo cambiar el estado: " + error.message);
+      return;
+    }
+
+    await cargarProveedoresYRemitos();
+  }
+
+  function obtenerCostoReferencia(
+    producto: Producto,
+    proveedorIdTexto = formRemito.proveedorId,
+  ) {
+    const proveedorId = Number(proveedorIdTexto);
+    const relacion = costosProveedorProductos.find(
+      (item) =>
+        item.proveedorId === proveedorId && item.productoId === producto.id,
+    );
+
+    return relacion && relacion.ultimoCosto > 0
+      ? relacion.ultimoCosto
+      : Math.max(0, Number(producto.costo || 0));
+  }
+
+  function completarComparacionCosto(
+    linea: LineaRemitoFormulario,
+    producto: Producto | null,
+    costoNuevo: number,
+    proveedorIdTexto = formRemito.proveedorId,
+  ): LineaRemitoFormulario {
+    if (!producto) {
+      return {
+        ...linea,
+        costoAnterior: null,
+        precioVentaActual: null,
+        variacionCostoPorcentaje: null,
+        precioVentaSugerido: null,
+      };
+    }
+
+    const costoAnterior = obtenerCostoReferencia(producto, proveedorIdTexto);
+    const precioVentaActual = Math.max(0, Number(producto.precio || 0));
+    const variacionCostoPorcentaje =
+      costoAnterior > 0 && costoNuevo > costoAnterior
+        ? ((costoNuevo - costoAnterior) / costoAnterior) * 100
+        : null;
+    const precioVentaSugerido =
+      variacionCostoPorcentaje !== null && precioVentaActual > 0
+        ? precioVentaActual * (costoNuevo / costoAnterior)
+        : null;
+
+    return {
+      ...linea,
+      costoAnterior,
+      precioVentaActual,
+      variacionCostoPorcentaje,
+      precioVentaSugerido,
+    };
+  }
+
+  function recalcularComparacionesParaProveedor(proveedorIdTexto: string) {
+    setLineasRemito((actuales) =>
+      actuales.map((linea) => {
+        const producto = productos.find(
+          (item) => item.id === Number(linea.productoId),
+        );
+
+        return completarComparacionCosto(
+          linea,
+          producto || null,
+          Number(linea.costoUnitario) || 0,
+          proveedorIdTexto,
+        );
+      }),
+    );
+  }
+
+  function actualizarLinea(
+    clave: string,
+    campo:
+      | "productoId"
+      | "productoNombre"
+      | "codigoProducto"
+      | "cantidad"
+      | "costoUnitario",
+    valor: string,
+  ) {
+    setLineasRemito((actuales) =>
+      actuales.map((linea) => {
+        if (linea.clave !== clave) return linea;
+
+        if (campo === "productoId") {
+          if (valor === "__automatico__") {
+            return completarComparacionCosto(
+              {
+                ...linea,
+                productoId: "",
+                crearProductoAutomaticamente: true,
+              },
+              null,
+              Number(linea.costoUnitario) || 0,
+            );
+          }
+
+          const producto = productos.find(
+            (item) => item.id === Number(valor),
+          );
+          const costo = producto ? Number(producto.costo || 0) : 0;
+
+          return completarComparacionCosto(
+            {
+              ...linea,
+              productoId: valor,
+              productoNombre: producto?.nombre || linea.productoNombre,
+              codigoProducto:
+                producto?.codigoProveedor || linea.codigoProducto,
+              crearProductoAutomaticamente: false,
+              costoUnitario: producto ? String(costo) : "",
+            },
+            producto || null,
+            costo,
+          );
+        }
+
+        if (campo === "costoUnitario") {
+          const producto = productos.find(
+            (item) => item.id === Number(linea.productoId),
+          );
+          return completarComparacionCosto(
+            { ...linea, costoUnitario: valor },
+            producto || null,
+            Number(valor) || 0,
+          );
+        }
+
+        return { ...linea, [campo]: valor };
+      }),
+    );
+  }
+
+  function normalizarTextoBusqueda(valor?: string | null) {
+    return (valor || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
+
+  function soloDigitos(valor?: string | null) {
+    return (valor || "").replace(/\D/g, "");
+  }
+
+  function buscarProveedorPorDatosFormulario() {
+    const cuitFormulario = soloDigitos(formRemito.proveedorCuitNuevo);
+
+    if (cuitFormulario) {
+      const porCuit = proveedores.find(
+        (proveedor) =>
+          proveedor.activo &&
+          soloDigitos(proveedor.cuit) === cuitFormulario,
+      );
+      if (porCuit) return porCuit.id;
+    }
+
+    const nombreFormulario = normalizarTextoBusqueda(
+      formRemito.proveedorNombreNuevo,
+    );
+    if (!nombreFormulario) return 0;
+
+    const porNombre = proveedores.find((proveedor) => {
+      if (!proveedor.activo) return false;
+      const nombreProveedor = normalizarTextoBusqueda(proveedor.nombre);
+      return (
+        nombreProveedor === nombreFormulario ||
+        nombreProveedor.includes(nombreFormulario) ||
+        nombreFormulario.includes(nombreProveedor)
+      );
+    });
+
+    return porNombre?.id || 0;
+  }
+
+  function buscarProveedorEscaneado(documento: DocumentoCompraEscaneado) {
+    const cuitDocumento = soloDigitos(documento.proveedorCuit);
+
+    if (cuitDocumento) {
+      const porCuit = proveedores.find(
+        (proveedor) =>
+          proveedor.activo && soloDigitos(proveedor.cuit) === cuitDocumento,
+      );
+      if (porCuit) return porCuit;
+    }
+
+    const nombreDocumento = normalizarTextoBusqueda(documento.proveedorNombre);
+    if (!nombreDocumento) return null;
+
+    return (
+      proveedores.find((proveedor) => {
+        if (!proveedor.activo) return false;
+        const nombreProveedor = normalizarTextoBusqueda(proveedor.nombre);
+        return (
+          nombreProveedor === nombreDocumento ||
+          nombreProveedor.includes(nombreDocumento) ||
+          nombreDocumento.includes(nombreProveedor)
+        );
+      }) || null
+    );
+  }
+
+  function buscarProductoEscaneado(item: ItemDocumentoCompraEscaneado) {
+    const codigoDocumento = normalizarTextoBusqueda(item.codigo).replace(/\s/g, "");
+
+    if (codigoDocumento) {
+      const porCodigoProveedor = productos.find(
+        (producto) =>
+          producto.activo &&
+          normalizarTextoBusqueda(producto.codigoProveedor).replace(/\s/g, "") ===
+            codigoDocumento,
+      );
+      if (porCodigoProveedor) return porCodigoProveedor;
+    }
+
+    const nombreDocumento = normalizarTextoBusqueda(item.nombre);
+    if (!nombreDocumento) return null;
+
+    const coincidenciaExacta = productos.find(
+      (producto) =>
+        producto.activo &&
+        normalizarTextoBusqueda(producto.nombre) === nombreDocumento,
+    );
+    if (coincidenciaExacta) return coincidenciaExacta;
+
+    const palabrasDocumento = nombreDocumento
+      .split(" ")
+      .filter((palabra) => palabra.length >= 3);
+
+    let mejorProducto: Producto | null = null;
+    let mejorPuntaje = 0;
+
+    productos
+      .filter((producto) => producto.activo)
+      .forEach((producto) => {
+        const nombreProducto = normalizarTextoBusqueda(producto.nombre);
+        const coincidencias = palabrasDocumento.filter((palabra) =>
+          nombreProducto.includes(palabra),
+        ).length;
+        const puntaje =
+          palabrasDocumento.length > 0
+            ? coincidencias / palabrasDocumento.length
+            : 0;
+
+        if (puntaje > mejorPuntaje) {
+          mejorPuntaje = puntaje;
+          mejorProducto = producto;
+        }
+      });
+
+    return mejorPuntaje >= 0.7 ? mejorProducto : null;
+  }
+
+  function normalizarNumeroOcr(valor?: string | null) {
+    let limpio = (valor || "")
+      .replace(/\$/g, "")
+      .replace(/\s/g, "")
+      .replace(/[^0-9,.-]/g, "");
+
+    if (!limpio) return 0;
+
+    const ultimaComa = limpio.lastIndexOf(",");
+    const ultimoPunto = limpio.lastIndexOf(".");
+
+    if (ultimaComa >= 0 && ultimoPunto >= 0) {
+      if (ultimaComa > ultimoPunto) {
+        limpio = limpio.replace(/\./g, "").replace(",", ".");
+      } else {
+        limpio = limpio.replace(/,/g, "");
+      }
+    } else if (ultimaComa >= 0) {
+      const decimales = limpio.length - ultimaComa - 1;
+      limpio =
+        decimales === 1 || decimales === 2
+          ? limpio.replace(/\./g, "").replace(",", ".")
+          : limpio.replace(/,/g, "");
+    } else if (ultimoPunto >= 0) {
+      const decimales = limpio.length - ultimoPunto - 1;
+      if (decimales !== 1 && decimales !== 2) {
+        limpio = limpio.replace(/\./g, "");
+      }
+    }
+
+    const numero = Number(limpio);
+    return Number.isFinite(numero) ? numero : 0;
+  }
+
+  function convertirFechaOcr(valor?: string | null) {
+    if (!valor) return "";
+
+    const coincidencia = valor.match(
+      /\b(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})\b/,
+    );
+    if (!coincidencia) return "";
+
+    const dia = Number(coincidencia[1]);
+    const mes = Number(coincidencia[2]);
+    let anio = Number(coincidencia[3]);
+    if (anio < 100) anio += 2000;
+
+    const fecha = new Date(anio, mes - 1, dia);
+    if (
+      fecha.getFullYear() !== anio ||
+      fecha.getMonth() !== mes - 1 ||
+      fecha.getDate() !== dia
+    ) {
+      return "";
+    }
+
+    return `${anio}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+  }
+
+  function extraerUltimoImporte(linea: string) {
+    const importes = linea.match(/\$?\s*-?\d[\d.]*?(?:,\d{1,2})?(?=\s|$)/g) || [];
+    return importes.length > 0
+      ? normalizarNumeroOcr(importes[importes.length - 1])
+      : 0;
+  }
+
+  function interpretarTextoOcr(texto: string): DocumentoCompraEscaneado {
+    const lineas = texto
+      .split(/\r?\n/)
+      .map((linea) => linea.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    const textoNormalizado = normalizarTextoBusqueda(texto);
+
+    const tipoDocumento: DocumentoCompraEscaneado["tipoDocumento"] =
+      textoNormalizado.includes("factura")
+        ? "factura"
+        : textoNormalizado.includes("remito")
+          ? "remito"
+          : "otro";
+
+    const cuitCoincidencia = texto.match(
+      /(?:C\.?\s*U\.?\s*I\.?\s*T\.?|CUIT)\s*[:\-]?\s*(\d{2}[\s-]?\d{8}[\s-]?\d)/i,
+    );
+    const proveedorCuit = cuitCoincidencia
+      ? soloDigitos(cuitCoincidencia[1])
+      : "";
+
+    const fechaLinea = lineas.find((linea) =>
+      /(?:fecha|emisi[oó]n)[^\d]{0,12}\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}/i.test(
+        linea,
+      ),
+    );
+    const fecha = convertirFechaOcr(fechaLinea || texto);
+
+    const numeroConPrefijo = texto.match(
+      /(?:n\s*[*°ºo.]?|nro\.?|n[uú]mero)\s*[:\-]?\s*(\d{1,5})\s*[-–]\s*(\d{3,12})/i,
+    );
+    const numeroCercanoTipo = texto.match(
+      /(?:factura|remito|comprobante)[\s\S]{0,100}?(\d{1,5})\s*[-–]\s*(\d{3,12})/i,
+    );
+    const numeroGenerico = texto.match(
+      /\b(\d{5})\s*[-–]\s*(\d{5,12})\b/,
+    );
+    const numeroCoincidencia =
+      numeroConPrefijo || numeroCercanoTipo || numeroGenerico;
+    const numero = numeroCoincidencia
+      ? `${numeroCoincidencia[1]}-${numeroCoincidencia[2]}`
+      : "";
+
+    const pedidoCoincidencia = texto.match(
+      /\bpedido\s*[:#\-]?\s*([A-Z0-9][A-Z0-9\-./]{1,30})/i,
+    );
+    const pedido = pedidoCoincidencia ? pedidoCoincidencia[1].trim() : "";
+
+    const lineasTotal = lineas.filter(
+      (linea) =>
+        /\btotal\b/i.test(linea) &&
+        !/subtotal|iva|impuesto|neto|descuento/i.test(linea),
+    );
+    const total = lineasTotal.reduce(
+      (mayor, linea) => Math.max(mayor, extraerUltimoImporte(linea)),
+      0,
+    );
+
+    const lineasEncabezado = lineas.slice(0, 12);
+    const proveedorLinea = lineasEncabezado.find((linea) => {
+      const normalizada = normalizarTextoBusqueda(linea);
+      return (
+        normalizada.length >= 4 &&
+        /[a-záéíóúñ]/i.test(linea) &&
+        !/factura|remito|original|duplicado|triplicado|fecha|cuit|responsable|iva|cliente|senor|domicilio|telefono|inicio de actividades|comprobante/i.test(
+          normalizada,
+        ) &&
+        !/^\d/.test(normalizada)
+      );
+    });
+    const proveedorNombre = proveedorLinea || "";
+
+    const palabrasNoProducto =
+      /subtotal|total|iva|impuesto|descuento|percepcion|retencion|forma de pago|vencimiento|cuit|domicilio|telefono|cliente|cantidad|descripcion|precio unitario|importe|codigo|página|pagina/i;
+    const patronNumero = /-?\$?\s*\d[\d.]*?(?:,\d{1,2})?(?=\s|$)/g;
+    const items: ItemDocumentoCompraEscaneado[] = [];
+
+    lineas.forEach((linea) => {
+      if (palabrasNoProducto.test(linea)) return;
+
+      const coincidencias = [...linea.matchAll(patronNumero)];
+      if (coincidencias.length < 2) return;
+
+      const valores = coincidencias.map((coincidencia) =>
+        normalizarNumeroOcr(coincidencia[0]),
+      );
+      const subtotal = valores[valores.length - 1];
+      const costoUnitario = valores[valores.length - 2];
+      let cantidad = valores.length >= 3 ? valores[valores.length - 3] : 1;
+
+      if (
+        !Number.isFinite(cantidad) ||
+        cantidad <= 0 ||
+        cantidad > 10000 ||
+        !Number.isFinite(costoUnitario) ||
+        costoUnitario <= 0 ||
+        !Number.isFinite(subtotal) ||
+        subtotal <= 0
+      ) {
+        return;
+      }
+
+      const indiceDescripcion =
+        valores.length >= 3
+          ? coincidencias[coincidencias.length - 3].index || 0
+          : coincidencias[coincidencias.length - 2].index || 0;
+      let nombre = linea.slice(0, indiceDescripcion).trim();
+      let codigo = "";
+
+      const codigoInicial = nombre.match(/^([A-Z0-9\-./]{3,})\s+(.+)$/i);
+      if (codigoInicial && /\d/.test(codigoInicial[1])) {
+        codigo = codigoInicial[1];
+        nombre = codigoInicial[2].trim();
+      }
+
+      nombre = nombre.replace(/^\d+[xX]?\s+/, "").trim();
+      if (nombre.length < 3 || !/[a-záéíóúñ]/i.test(nombre)) return;
+
+      if (Math.abs(cantidad * costoUnitario - subtotal) > Math.max(2, subtotal * 0.25)) {
+        cantidad = Math.max(1, Math.round(subtotal / costoUnitario));
+      }
+
+      items.push({
+        codigo,
+        nombre,
+        cantidad: Math.max(1, Math.round(cantidad)),
+        costoUnitario,
+        subtotal,
+        confianza: 0.55,
+      });
+    });
+
+    const itemsSinDuplicados = items.filter(
+      (item, indice, arreglo) =>
+        arreglo.findIndex(
+          (otro) =>
+            normalizarTextoBusqueda(otro.nombre) ===
+              normalizarTextoBusqueda(item.nombre) &&
+            otro.cantidad === item.cantidad &&
+            otro.subtotal === item.subtotal,
+        ) === indice,
+    );
+
+    const indiceEncabezadoProductos = lineas.findIndex((linea) =>
+      /art[ií]culo|detalle|descripci[oó]n|producto/i.test(linea),
+    );
+    const itemsSoloDescripcion: ItemDocumentoCompraEscaneado[] = [];
+
+    if (indiceEncabezadoProductos >= 0) {
+      const lineasPosteriores = lineas.slice(
+        indiceEncabezadoProductos + 1,
+        indiceEncabezadoProductos + 18,
+      );
+
+      for (const lineaOriginal of lineasPosteriores) {
+        const lineaLimpia = lineaOriginal.trim();
+        // En remitos, estas leyendas marcan el final real de la tabla de artículos.
+        // Se corta la lectura para no convertir habilitaciones, códigos fiscales,
+        // firmas o textos del pie en productos nuevos.
+        if (
+          /^(pedido|habilitaci[oó]n|localidad|recib[ií]|aclaraci[oó]n|domicilio|total|subtotal|cuit|c\.?u\.?i\.?t|ing\.?\s*brutos|fecha de inicio|firma|transportista|bultos|peso|observaciones)\b/i.test(
+            lineaLimpia,
+          )
+        ) {
+          break;
+        }
+
+        if (!/[a-záéíóúñ]/i.test(lineaLimpia) || lineaLimpia.length < 5) {
+          continue;
+        }
+
+        const cantidadDigitos = (lineaLimpia.match(/\d/g) || []).length;
+        const cantidadLetras = (lineaLimpia.match(/[a-záéíóúñ]/gi) || []).length;
+
+        // Descarta numeraciones de autorización, códigos fiscales y cadenas de barras.
+        if (
+          cantidadDigitos >= 14 &&
+          cantidadDigitos > Math.max(8, cantidadLetras * 2)
+        ) {
+          continue;
+        }
+
+        if (
+          /\b(?:al\s+n|desde|hasta)\s*[*°ºo.]?\s*\d/i.test(lineaLimpia) ||
+          /^[-–—\s]*\d{4,}\s*[-–]\s*\d{4,}/.test(lineaLimpia) ||
+          /^(?:om|im)["'´`\s]*$/i.test(lineaLimpia)
+        ) {
+          continue;
+        }
+
+        let nombre = lineaLimpia;
+        let codigo = "";
+        let cantidad = 1;
+
+        const cantidadInicial = nombre.match(/^(\d{1,4})\s+(.+)$/);
+        if (cantidadInicial) {
+          cantidad = Math.max(1, Number(cantidadInicial[1]) || 1);
+          nombre = cantidadInicial[2].trim();
+        }
+
+        const codigoInicial = nombre.match(/^([A-Z0-9\-./]{2,14})\s+(.+)$/i);
+        if (
+          codigoInicial &&
+          /\d/.test(codigoInicial[1]) &&
+          /[a-záéíóúñ]/i.test(codigoInicial[2])
+        ) {
+          codigo = codigoInicial[1];
+          nombre = codigoInicial[2].trim();
+        }
+
+        const palabrasNombre = nombre.match(/[a-záéíóúñ]{3,}/gi) || [];
+        if (nombre.length < 4 || palabrasNombre.length === 0) continue;
+
+        itemsSoloDescripcion.push({
+          codigo,
+          nombre,
+          cantidad,
+          costoUnitario: 0,
+          subtotal: 0,
+          confianza: 0.45,
+        });
+      }
+    }
+
+    const itemsCompletos = [...itemsSinDuplicados, ...itemsSoloDescripcion]
+      .filter(
+        (item, indice, arreglo) =>
+          arreglo.findIndex(
+            (otro) =>
+              normalizarTextoBusqueda(otro.nombre) ===
+              normalizarTextoBusqueda(item.nombre),
+          ) === indice,
+      )
+      .slice(0, 100);
+
+    const medioPago = textoNormalizado.includes("transfer")
+      ? "Transferencia"
+      : textoNormalizado.includes("efectivo")
+        ? "Efectivo"
+        : textoNormalizado.includes("debito")
+          ? "Débito"
+          : textoNormalizado.includes("credito")
+            ? "Crédito"
+            : textoNormalizado.includes("cheque")
+              ? "Cheque"
+              : "Cuenta corriente";
+
+    return {
+      tipoDocumento,
+      proveedorNombre,
+      proveedorCuit,
+      numero,
+      fecha,
+      pedido,
+      medioPago,
+      total:
+        total ||
+        itemsCompletos.reduce((suma, item) => suma + item.subtotal, 0),
+      observaciones: "Datos obtenidos con OCR gratuito. Revisar antes de confirmar.",
+      items: itemsCompletos,
+    };
+  }
+
+  function prepararImagenesParaOcr(archivo: File) {
+    return new Promise<{
+      mejorada: HTMLCanvasElement;
+      binaria: HTMLCanvasElement;
+    }>((resolve, reject) => {
+      const url = URL.createObjectURL(archivo);
+      const imagen = new Image();
+
+      imagen.onload = () => {
+        try {
+          const ladoMayor = Math.max(imagen.width, imagen.height);
+          const escala = Math.min(2.5, Math.max(1, 2800 / ladoMayor));
+          const ancho = Math.max(1, Math.round(imagen.width * escala));
+          const alto = Math.max(1, Math.round(imagen.height * escala));
+
+          const canvasBase = document.createElement("canvas");
+          canvasBase.width = ancho;
+          canvasBase.height = alto;
+
+          const contextoBase = canvasBase.getContext("2d", {
+            willReadFrequently: true,
+          });
+          if (!contextoBase) throw new Error("No se pudo preparar la imagen.");
+
+          contextoBase.imageSmoothingEnabled = true;
+          contextoBase.imageSmoothingQuality = "high";
+          contextoBase.drawImage(imagen, 0, 0, ancho, alto);
+
+          const datosBase = contextoBase.getImageData(0, 0, ancho, alto);
+          const cantidadPixeles = ancho * alto;
+          const grises = new Uint8ClampedArray(cantidadPixeles);
+          const histograma = new Uint32Array(256);
+
+          for (let pixel = 0; pixel < cantidadPixeles; pixel += 1) {
+            const indice = pixel * 4;
+            const gris = Math.round(
+              datosBase.data[indice] * 0.299 +
+                datosBase.data[indice + 1] * 0.587 +
+                datosBase.data[indice + 2] * 0.114,
+            );
+            grises[pixel] = gris;
+            histograma[gris] += 1;
+          }
+
+          function obtenerPercentil(porcentaje: number) {
+            const objetivo = cantidadPixeles * porcentaje;
+            let acumulado = 0;
+
+            for (let valor = 0; valor < histograma.length; valor += 1) {
+              acumulado += histograma[valor];
+              if (acumulado >= objetivo) return valor;
+            }
+
+            return 255;
+          }
+
+          const negroReferencia = obtenerPercentil(0.03);
+          const blancoReferencia = Math.max(
+            negroReferencia + 35,
+            obtenerPercentil(0.97),
+          );
+          const rango = Math.max(1, blancoReferencia - negroReferencia);
+
+          const canvasMejorada = document.createElement("canvas");
+          canvasMejorada.width = ancho;
+          canvasMejorada.height = alto;
+          const contextoMejorada = canvasMejorada.getContext("2d");
+          if (!contextoMejorada) {
+            throw new Error("No se pudo mejorar la imagen.");
+          }
+
+          const datosMejorados = contextoMejorada.createImageData(ancho, alto);
+          const grisesMejorados = new Uint8ClampedArray(cantidadPixeles);
+
+          for (let pixel = 0; pixel < cantidadPixeles; pixel += 1) {
+            const indice = pixel * 4;
+            const expandido =
+              ((grises[pixel] - negroReferencia) * 255) / rango;
+            const contrastado = Math.max(
+              0,
+              Math.min(255, (expandido - 128) * 1.28 + 128),
+            );
+            const valor = Math.round(contrastado);
+
+            grisesMejorados[pixel] = valor;
+            datosMejorados.data[indice] = valor;
+            datosMejorados.data[indice + 1] = valor;
+            datosMejorados.data[indice + 2] = valor;
+            datosMejorados.data[indice + 3] = 255;
+          }
+
+          contextoMejorada.putImageData(datosMejorados, 0, 0);
+
+          const tamanoBloque = 48;
+          const columnasBloques = Math.ceil(ancho / tamanoBloque);
+          const filasBloques = Math.ceil(alto / tamanoBloque);
+          const sumaBloques = new Float64Array(
+            columnasBloques * filasBloques,
+          );
+          const cantidadBloques = new Uint32Array(
+            columnasBloques * filasBloques,
+          );
+
+          for (let y = 0; y < alto; y += 1) {
+            const filaBloque = Math.floor(y / tamanoBloque);
+
+            for (let x = 0; x < ancho; x += 1) {
+              const columnaBloque = Math.floor(x / tamanoBloque);
+              const indiceBloque =
+                filaBloque * columnasBloques + columnaBloque;
+              const indicePixel = y * ancho + x;
+
+              sumaBloques[indiceBloque] += grisesMejorados[indicePixel];
+              cantidadBloques[indiceBloque] += 1;
+            }
+          }
+
+          const canvasBinaria = document.createElement("canvas");
+          canvasBinaria.width = ancho;
+          canvasBinaria.height = alto;
+          const contextoBinaria = canvasBinaria.getContext("2d");
+          if (!contextoBinaria) {
+            throw new Error("No se pudo convertir la imagen.");
+          }
+
+          const datosBinarios = contextoBinaria.createImageData(ancho, alto);
+
+          for (let y = 0; y < alto; y += 1) {
+            const filaBloque = Math.floor(y / tamanoBloque);
+
+            for (let x = 0; x < ancho; x += 1) {
+              const columnaBloque = Math.floor(x / tamanoBloque);
+              const indiceBloque =
+                filaBloque * columnasBloques + columnaBloque;
+              const indicePixel = y * ancho + x;
+              const indiceDatos = indicePixel * 4;
+              const promedio =
+                sumaBloques[indiceBloque] /
+                Math.max(1, cantidadBloques[indiceBloque]);
+              const umbral = Math.max(105, Math.min(215, promedio - 17));
+              const valor = grisesMejorados[indicePixel] < umbral ? 0 : 255;
+
+              datosBinarios.data[indiceDatos] = valor;
+              datosBinarios.data[indiceDatos + 1] = valor;
+              datosBinarios.data[indiceDatos + 2] = valor;
+              datosBinarios.data[indiceDatos + 3] = 255;
+            }
+          }
+
+          contextoBinaria.putImageData(datosBinarios, 0, 0);
+          resolve({ mejorada: canvasMejorada, binaria: canvasBinaria });
+        } catch (error) {
+          reject(error);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      };
+
+      imagen.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("No se pudo abrir la imagen seleccionada."));
+      };
+      imagen.src = url;
+    });
+  }
+
+  function puntuarLecturaOcr(texto: string, confianza: number) {
+    const textoLimpio = texto.trim();
+    if (!textoLimpio) return -1;
+
+    const lineas = textoLimpio
+      .split(/\r?\n/)
+      .map((linea) => linea.trim())
+      .filter(Boolean);
+    const lineasMixtas = lineas.filter(
+      (linea) => /[a-záéíóúñ]/i.test(linea) && /\d/.test(linea),
+    ).length;
+    const palabrasClave = (
+      textoLimpio.match(
+        /factura|remito|cuit|fecha|total|cantidad|precio|importe|subtotal/gi,
+      ) || []
+    ).length;
+    const documentoInterpretado = interpretarTextoOcr(textoLimpio);
+
+    return (
+      Number(confianza || 0) +
+      Math.min(18, lineasMixtas * 1.5) +
+      Math.min(14, palabrasClave * 2) +
+      documentoInterpretado.items.length * 8 +
+      (documentoInterpretado.proveedorNombre ? 5 : 0) +
+      (documentoInterpretado.numero ? 4 : 0) +
+      (documentoInterpretado.fecha ? 4 : 0) +
+      (documentoInterpretado.total > 0 ? 6 : 0)
+    );
+  }
+
+  function normalizarFechaEscaneada(fecha?: string) {
+    if (fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) return fecha;
+    return fechaLocal;
+  }
+
+  function normalizarMedioPagoEscaneado(medioPago?: string) {
+    const valor = normalizarTextoBusqueda(medioPago);
+    if (valor.includes("efectivo")) return "Efectivo";
+    if (valor.includes("transfer")) return "Transferencia";
+    if (valor.includes("debito")) return "Débito";
+    if (valor.includes("credito")) return "Crédito";
+    if (valor.includes("cheque")) return "Cheque";
+    return "Cuenta corriente";
+  }
+
+  async function analizarDocumentoCompra() {
+    if (!archivoDocumento) {
+      alert("Seleccioná una foto del remito o factura.");
+      return;
+    }
+
+    const tiposPermitidos = ["image/jpeg", "image/png", "image/webp"];
+    if (!tiposPermitidos.includes(archivoDocumento.type)) {
+      alert(
+        "El escáner gratuito admite imágenes JPG, PNG o WEBP. Para un PDF, sacá una captura o una foto de la página.",
+      );
+      return;
+    }
+
+    const LIMITE_ARCHIVO = 10 * 1024 * 1024;
+    if (archivoDocumento.size > LIMITE_ARCHIVO) {
+      alert("La imagen supera los 10 MB. Probá con una foto más liviana.");
+      return;
+    }
+
+    setAnalizandoDocumento(true);
+    setProgresoEscaneo(0);
+    setTextoOcr("");
+    setVistaPreviaOcr("");
+    setAdvertenciasEscaneo([]);
+
+    let worker: any = null;
+    let etapaLectura: "cargando" | "primera" | "segunda" = "cargando";
+
+    try {
+      setProgresoEscaneo(3);
+      const imagenesPreparadas =
+        await prepararImagenesParaOcr(archivoDocumento);
+      setVistaPreviaOcr(imagenesPreparadas.binaria.toDataURL("image/png"));
+      setProgresoEscaneo(8);
+
+      const tesseract = await import("tesseract.js");
+      worker = await tesseract.createWorker("spa", 1, {
+        logger: (mensaje: any) => {
+          if (typeof mensaje?.progress !== "number") return;
+
+          if (etapaLectura === "primera") {
+            setProgresoEscaneo(10 + Math.round(mensaje.progress * 40));
+          } else if (etapaLectura === "segunda") {
+            setProgresoEscaneo(52 + Math.round(mensaje.progress * 46));
+          }
+        },
+      });
+
+      etapaLectura = "primera";
+      await worker.setParameters({
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300",
+        tessedit_pageseg_mode: "3",
+      });
+      const lecturaMejorada = await worker.recognize(
+        imagenesPreparadas.mejorada,
+      );
+
+      etapaLectura = "segunda";
+      await worker.setParameters({
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300",
+        tessedit_pageseg_mode: "6",
+      });
+      const lecturaBinaria = await worker.recognize(
+        imagenesPreparadas.binaria,
+      );
+
+      const candidatos = [lecturaMejorada, lecturaBinaria]
+        .map((resultado, indice) => {
+          const texto = String(resultado?.data?.text || "").trim();
+          const confianza = Number(resultado?.data?.confidence || 0);
+
+          return {
+            texto,
+            confianza,
+            puntaje: puntuarLecturaOcr(texto, confianza),
+            metodo: indice === 0 ? "imagen mejorada" : "alto contraste",
+          };
+        })
+        .filter((candidato) => candidato.texto)
+        .sort((a, b) => b.puntaje - a.puntaje);
+
+      const mejorLectura = candidatos[0];
+
+      if (!mejorLectura?.texto) {
+        throw new Error(
+          "No se pudo leer texto. Probá con más luz, la cámara derecha y el documento ocupando toda la imagen.",
+        );
+      }
+
+      const texto = mejorLectura.texto;
+      setTextoOcr(texto);
+      const documento = interpretarTextoOcr(texto);
+      const proveedorEncontrado = buscarProveedorEscaneado(documento);
+      const advertencias: string[] = [
+        `Se hicieron dos lecturas y se eligió ${mejorLectura.metodo} (${Math.round(mejorLectura.confianza)}% de confianza OCR).`,
+        "El resultado quedó como borrador. Primero revisá el documento y después los productos.",
+      ];
+
+      if (mejorLectura.confianza < 50) {
+        advertencias.push(
+          "La confianza de lectura es baja. Conviene repetir la foto más cerca, derecha y sin sombras.",
+        );
+      }
+
+      const puedeCrearProveedorAutomaticamente = Boolean(
+        !proveedorEncontrado &&
+          (documento.proveedorNombre.trim() || documento.proveedorCuit.trim()),
+      );
+
+      if (puedeCrearProveedorAutomaticamente) {
+        advertencias.push(
+          `El proveedor “${documento.proveedorNombre || documento.proveedorCuit}” no existe. Quedó propuesto como proveedor nuevo y solo se creará en la confirmación final.`,
+        );
+      } else if (!proveedorEncontrado) {
+        advertencias.push(
+          "No se pudo reconocer el proveedor. Ingresalo o seleccionalo antes de confirmar.",
+        );
+      }
+
+      let productosParaCrear = 0;
+      const lineasDetectadas = documento.items.map((item) => {
+        const productoEncontrado = buscarProductoEscaneado(item);
+        if (!productoEncontrado) productosParaCrear += 1;
+
+        const costoNuevo = Math.max(0, Number(item.costoUnitario) || 0);
+        const lineaBase: LineaRemitoFormulario = {
+          clave: `${Date.now()}-${Math.random()}`,
+          productoId: productoEncontrado ? String(productoEncontrado.id) : "",
+          productoNombre: item.nombre.trim() || "Producto leído por OCR",
+          codigoProducto: item.codigo.trim(),
+          crearProductoAutomaticamente: !productoEncontrado,
+          cantidad: String(Math.max(1, Math.round(Number(item.cantidad) || 1))),
+          costoUnitario: String(costoNuevo),
+          costoAnterior: null,
+          precioVentaActual: null,
+          variacionCostoPorcentaje: null,
+          precioVentaSugerido: null,
+        };
+
+        return completarComparacionCosto(
+          lineaBase,
+          productoEncontrado || null,
+          costoNuevo,
+          proveedorEncontrado ? String(proveedorEncontrado.id) : "",
+        );
+      });
+
+      if (productosParaCrear > 0) {
+        advertencias.push(
+          `${productosParaCrear} ${productosParaCrear === 1 ? "producto quedó propuesto" : "productos quedaron propuestos"} como nuevo. No se creará nada hasta la confirmación final.`,
+        );
+      }
+
+      const productosSinCosto = lineasDetectadas.filter(
+        (linea) => Number(linea.costoUnitario) <= 0,
+      ).length;
+      if (productosSinCosto > 0) {
+        advertencias.push(
+          `${productosSinCosto} ${productosSinCosto === 1 ? "producto quedó" : "productos quedaron"} sin costo. Completá el costo para poder detectar aumentos de precio.`,
+        );
+      }
+
+      if (lineasDetectadas.length === 0) {
+        advertencias.push(
+          "No se reconocieron filas de productos. Completalas manualmente usando el texto detectado.",
+        );
+      }
+
+      const tipoEtiqueta =
+        documento.tipoDocumento === "factura"
+          ? "Factura"
+          : documento.tipoDocumento === "remito"
+            ? "Remito"
+            : "Documento de compra";
+
+      setFormRemito({
+        tipoDocumento: documento.tipoDocumento,
+        proveedorId: proveedorEncontrado ? String(proveedorEncontrado.id) : "",
+        crearProveedorAutomaticamente: puedeCrearProveedorAutomaticamente,
+        proveedorNombreNuevo: documento.proveedorNombre.trim(),
+        proveedorCuitNuevo: documento.proveedorCuit.trim(),
+        numero: documento.numero || "",
+        fecha: normalizarFechaEscaneada(documento.fecha),
+        pedido: documento.pedido || "",
+        totalDocumentoDetectado:
+          Number(documento.total || 0) > 0
+            ? String(Number(documento.total || 0))
+            : "",
+        medioPago: normalizarMedioPagoEscaneado(documento.medioPago),
+        pagado: false,
+        observaciones: `${tipoEtiqueta} leído con OCR gratuito mejorado desde ${archivoDocumento.name}`,
+      });
+      setLineasRemito(
+        lineasDetectadas.length > 0 ? lineasDetectadas : [crearLineaVacia()],
+      );
+      setDocumentoEscaneado(documento);
+      setPasoRemito(1);
+      setAdvertenciasEscaneo(advertencias);
+      setProgresoEscaneo(100);
+    } catch (error: any) {
+      console.error("Error al analizar el documento:", error);
+      alert(
+        "No se pudo analizar el documento: " +
+          (error?.message || "Error desconocido"),
+      );
+    } finally {
+      if (worker) {
+        try {
+          await worker.terminate();
+        } catch (error) {
+          console.error("No se pudo cerrar el lector OCR:", error);
+        }
+      }
+      setAnalizandoDocumento(false);
+    }
+  }
+
+  function limpiarEscaneoDocumento() {
+    setArchivoDocumento(null);
+    setDocumentoEscaneado(null);
+    setAdvertenciasEscaneo([]);
+    setTextoOcr("");
+    setVistaPreviaOcr("");
+    setProgresoEscaneo(0);
+  }
+
+  function limpiarRemito() {
+    setFormRemito({
+      tipoDocumento: "remito",
+      proveedorId: "",
+      crearProveedorAutomaticamente: false,
+      proveedorNombreNuevo: "",
+      proveedorCuitNuevo: "",
+      numero: "",
+      fecha: fechaLocal,
+      pedido: "",
+      totalDocumentoDetectado: "",
+      medioPago: "Cuenta corriente",
+      pagado: false,
+      observaciones: "",
+    });
+    setLineasRemito([crearLineaVacia()]);
+    setPasoRemito(1);
+  }
+
+  async function registrarRemito() {
+    if (!comercioActual) return;
+
+    const proveedorValido =
+      Boolean(formRemito.proveedorId) ||
+      (formRemito.crearProveedorAutomaticamente &&
+        Boolean(
+          formRemito.proveedorNombreNuevo.trim() ||
+            formRemito.proveedorCuitNuevo.trim(),
+        ));
+
+    if (!proveedorValido || !formRemito.numero.trim() || !formRemito.fecha) {
+      setPasoRemito(1);
+      alert(
+        "Completá proveedor, número y fecha antes de confirmar el documento.",
+      );
+      return;
+    }
+
+    if (documentoDuplicadoDetectado) {
+      setPasoRemito(1);
+      alert(
+        "Ese número de documento ya está registrado para el proveedor seleccionado.",
+      );
+      return;
+    }
+
+    const lineasValidas = lineasRemito.filter(
+      (linea) =>
+        (linea.productoId ||
+          (linea.crearProductoAutomaticamente &&
+            linea.productoNombre.trim())) &&
+        Number(linea.cantidad) > 0 &&
+        Number(linea.costoUnitario) >= 0,
+    );
+
+    if (lineasValidas.length !== lineasRemito.length) {
+      setPasoRemito(2);
+      alert(
+        "Revisá todas las filas: cada una necesita un producto, una cantidad válida y un costo igual o mayor a cero.",
+      );
+      return;
+    }
+
+    const clavesProductos = lineasValidas.map((linea) =>
+      linea.productoId
+        ? `id:${linea.productoId}`
+        : `nuevo:${normalizarTextoBusqueda(
+            linea.codigoProducto || linea.productoNombre,
+          )}`,
+    );
+    if (new Set(clavesProductos).size !== clavesProductos.length) {
+      alert("No repitas el mismo producto dentro del remito.");
+      return;
+    }
+
+    if (formRemito.pagado && formRemito.medioPago === "Cuenta corriente") {
+      alert("Elegí el medio de pago utilizado.");
+      return;
+    }
+
+    const productosNuevos = lineasValidas.filter(
+      (linea) => linea.crearProductoAutomaticamente,
+    ).length;
+    const proveedorNuevo = formRemito.crearProveedorAutomaticamente;
+
+    const resumenAutomatico = [
+      proveedorNuevo ? "1 proveedor nuevo" : "",
+      productosNuevos > 0
+        ? `${productosNuevos} ${productosNuevos === 1 ? "producto nuevo" : "productos nuevos"}`
+        : "",
+      aumentosCostoDetectados.length > 0
+        ? `${aumentosCostoDetectados.length} ${aumentosCostoDetectados.length === 1 ? "aumento de costo" : "aumentos de costo"}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+    if (
+      resumenAutomatico &&
+      !confirm(
+        `Al confirmar se procesará automáticamente: ${resumenAutomatico}. ¿Continuar?`,
+      )
+    ) {
+      return;
+    }
+
+    const proveedorResumen = formRemito.crearProveedorAutomaticamente
+      ? formRemito.proveedorNombreNuevo || formRemito.proveedorCuitNuevo
+      : proveedores.find(
+          (proveedor) => proveedor.id === Number(formRemito.proveedorId),
+        )?.nombre || "Proveedor";
+
+    if (
+      !confirm(
+        `Confirmación final\n\n${formRemito.tipoDocumento === "factura" ? "Factura" : formRemito.tipoDocumento === "remito" ? "Remito" : "Documento"}: ${formRemito.numero}\nProveedor: ${proveedorResumen}\nFecha: ${formRemito.fecha}\nProductos: ${lineasValidas.length}\nTotal calculado: ${money(totalRemito)}\n\nRecién ahora se crearán los registros nuevos y se actualizará el stock. ¿Continuar?`,
+      )
+    ) {
+      return;
+    }
+
+    const observacionesDocumento = [
+      formRemito.observaciones.trim(),
+      `Tipo de documento: ${formRemito.tipoDocumento}.`,
+      formRemito.pedido.trim()
+        ? `Pedido relacionado: ${formRemito.pedido.trim()}.`
+        : "",
+      Number(formRemito.totalDocumentoDetectado || 0) > 0
+        ? `Total detectado por OCR: ${money(
+            Number(formRemito.totalDocumentoDetectado),
+          )}.`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    setRegistrandoRemito(true);
+
+    const { data, error } = await supabase.rpc(
+      "registrar_remito_automatico_seguro",
+      {
+        p_comercio_id: comercioActual.id,
+        p_proveedor_id: formRemito.crearProveedorAutomaticamente
+          ? null
+          : Number(formRemito.proveedorId),
+        p_proveedor_nombre: formRemito.proveedorNombreNuevo.trim(),
+        p_proveedor_cuit: formRemito.proveedorCuitNuevo.trim(),
+        p_numero: formRemito.numero.trim(),
+        p_fecha: formRemito.fecha,
+        p_medio_pago: formRemito.medioPago,
+        p_pagado: formRemito.pagado,
+        p_observaciones: observacionesDocumento,
+        p_items: lineasValidas.map((linea) => ({
+          producto_id: linea.crearProductoAutomaticamente
+            ? null
+            : Number(linea.productoId),
+          nombre_producto: linea.productoNombre.trim(),
+          codigo_producto: linea.codigoProducto.trim(),
+          cantidad: Number(linea.cantidad),
+          costo_unitario: Number(linea.costoUnitario),
+        })),
+      },
+    );
+
+    setRegistrandoRemito(false);
+
+    if (error) {
+      alert("No se pudo registrar el remito: " + error.message);
+      return;
+    }
+
+    const resultado: any = data || {};
+    const aumentos = Array.isArray(resultado.aumentos)
+      ? resultado.aumentos
+      : [];
+
+    limpiarRemito();
+    limpiarEscaneoDocumento();
+    await Promise.all([cargarProveedoresYRemitos(), recargarDatos()]);
+
+    const mensajes = [
+      "Remito registrado. El stock y los costos fueron actualizados.",
+      resultado.proveedor_creado
+        ? "Se creó y asoció automáticamente el proveedor."
+        : "",
+      Number(resultado.productos_creados || 0) > 0
+        ? `Se crearon ${resultado.productos_creados} productos automáticamente.`
+        : "",
+    ].filter(Boolean);
+
+    if (aumentos.length > 0) {
+      mensajes.push(
+        "Aumentos detectados:\n" +
+          aumentos
+            .slice(0, 10)
+            .map(
+              (item: any) =>
+                `• ${item.nombre}: ${money(Number(item.costo_anterior || 0))} → ${money(Number(item.costo_nuevo || 0))} (+${Number(item.porcentaje || 0).toFixed(1)}%). Precio sugerido: ${money(Number(item.precio_sugerido || 0))}`,
+            )
+            .join("\n"),
+      );
+    }
+
+    alert(mensajes.join("\n\n"));
+  }
+
+  async function pagarRemito(remito: RemitoCompra) {
+    const medioPago = window.prompt(
+      "Ingresá el medio de pago utilizado:",
+      remito.medioPago === "Cuenta corriente"
+        ? "Transferencia"
+        : remito.medioPago,
+    );
+
+    if (!medioPago?.trim()) return;
+
+    const { error } = await supabase.rpc("marcar_remito_pagado_seguro", {
+      p_remito_id: remito.id,
+      p_medio_pago: medioPago.trim(),
+    });
+
+    if (error) {
+      alert("No se pudo registrar el pago: " + error.message);
+      return;
+    }
+
+    await Promise.all([cargarProveedoresYRemitos(), recargarDatos()]);
+  }
+
+  return (
+    <>
+      <Header
+        title="Proveedores y remitos"
+        subtitle="Administrá proveedores, escaneá compras y actualizá costos y stock."
+        action={
+          puedeCrearProveedor && pestana === "proveedores" ? (
+            <Button
+              onClick={() => {
+                if (mostrarFormularioProveedor) {
+                  limpiarProveedor();
+                } else {
+                  setMostrarFormularioProveedor(true);
+                }
+              }}
+            >
+              {mostrarFormularioProveedor ? "Cerrar" : "+ Nuevo proveedor"}
+            </Button>
+          ) : null
+        }
+      />
+
+      <div className="app-category-tabs" style={styles.categoryTabs}>
+        <button
+          type="button"
+          style={{
+            ...styles.categoryTab,
+            ...(pestana === "proveedores" ? styles.categoryTabActive : {}),
+          }}
+          onClick={() => setPestana("proveedores")}
+        >
+          Proveedores
+        </button>
+        <button
+          type="button"
+          style={{
+            ...styles.categoryTab,
+            ...(pestana === "remitos" ? styles.categoryTabActive : {}),
+          }}
+          onClick={() => setPestana("remitos")}
+        >
+          Remitos y compras
+        </button>
+      </div>
+
+      <div className="app-cards-grid" style={styles.cardsGrid}>
+        <Card
+          title="Proveedores activos"
+          value={String(proveedores.filter((item) => item.activo).length)}
+          tone="blue"
+        />
+        <Card
+          title="Remitos registrados"
+          value={String(remitos.length)}
+          tone="purple"
+        />
+        <Card
+          title="Deuda pendiente"
+          value={money(deudaPendiente)}
+          tone={deudaPendiente > 0 ? "orange" : "green"}
+        />
+        <Card
+          title="Última compra"
+          value={remitos[0]?.fecha ? formatDate(remitos[0].fecha) : "Sin datos"}
+        />
+      </div>
+
+      {cargando && <Panel title="Actualizando"><Empty text="Cargando proveedores y remitos..." /></Panel>}
+
+      {pestana === "proveedores" && (
+        <>
+          {mostrarFormularioProveedor && (
+            <Panel
+              title={
+                proveedorEditando ? "Editar proveedor" : "Nuevo proveedor"
+              }
+            >
+              <div className="app-form-grid" style={styles.formGrid}>
+                <Input
+                  placeholder="Nombre o razón social"
+                  value={formProveedor.nombre}
+                  onChange={(valor) =>
+                    setFormProveedor({ ...formProveedor, nombre: valor })
+                  }
+                />
+                <Input
+                  placeholder="CUIT"
+                  value={formProveedor.cuit}
+                  onChange={(valor) =>
+                    setFormProveedor({ ...formProveedor, cuit: valor })
+                  }
+                />
+                <Input
+                  placeholder="Teléfono"
+                  value={formProveedor.telefono}
+                  onChange={(valor) =>
+                    setFormProveedor({ ...formProveedor, telefono: valor })
+                  }
+                />
+                <Input
+                  placeholder="Correo electrónico"
+                  value={formProveedor.email}
+                  onChange={(valor) =>
+                    setFormProveedor({ ...formProveedor, email: valor })
+                  }
+                />
+                <Input
+                  placeholder="Persona de contacto"
+                  value={formProveedor.contacto}
+                  onChange={(valor) =>
+                    setFormProveedor({ ...formProveedor, contacto: valor })
+                  }
+                />
+                <Input
+                  placeholder="Dirección"
+                  value={formProveedor.direccion}
+                  onChange={(valor) =>
+                    setFormProveedor({ ...formProveedor, direccion: valor })
+                  }
+                />
+              </div>
+
+              <textarea
+                className="app-textarea"
+                style={{ ...styles.textarea, marginTop: 12 }}
+                rows={3}
+                placeholder="Observaciones"
+                value={formProveedor.observaciones}
+                onChange={(event) =>
+                  setFormProveedor({
+                    ...formProveedor,
+                    observaciones: event.target.value,
+                  })
+                }
+              />
+
+              <div className="app-actions" style={styles.actions}>
+                <Button onClick={guardarProveedor} disabled={guardandoProveedor}>
+                  {guardandoProveedor ? "Guardando..." : "Guardar proveedor"}
+                </Button>
+                <SecondaryButton onClick={limpiarProveedor}>
+                  Cancelar
+                </SecondaryButton>
+              </div>
+            </Panel>
+          )}
+
+          <Panel title="Listado de proveedores">
+            {proveedores.length === 0 ? (
+              <Empty text="Todavía no hay proveedores registrados." />
+            ) : (
+              <Table>
+                <thead style={styles.thead}>
+                  <tr>
+                    <Th>Proveedor</Th>
+                    <Th>Contacto</Th>
+                    <Th>CUIT</Th>
+                    <Th>Estado</Th>
+                    <Th>Acciones</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {proveedores.map((proveedor) => (
+                    <tr key={proveedor.id} style={styles.tr}>
+                      <Td>
+                        <div>
+                          <strong>{proveedor.nombre}</strong>
+                          <div style={{ color: "#64748b", fontSize: 12 }}>
+                            {proveedor.email || proveedor.direccion || "Sin datos adicionales"}
+                          </div>
+                        </div>
+                      </Td>
+                      <Td>{proveedor.contacto || proveedor.telefono || "—"}</Td>
+                      <Td>{proveedor.cuit || "—"}</Td>
+                      <Td>
+                        <Badge danger={!proveedor.activo}>
+                          {proveedor.activo ? "Activo" : "Inactivo"}
+                        </Badge>
+                      </Td>
+                      <Td>
+                        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                          {puedeEditarProveedor && (
+                            <button
+                              type="button"
+                              style={styles.smallButton}
+                              onClick={() => editarProveedor(proveedor)}
+                            >
+                              Editar
+                            </button>
+                          )}
+                          {(puedeDesactivarProveedor || puedeEditarProveedor) && (
+                            <button
+                              type="button"
+                              style={
+                                proveedor.activo
+                                  ? styles.smallButtonDanger
+                                  : styles.smallButtonAlt
+                              }
+                              onClick={() => cambiarEstadoProveedor(proveedor)}
+                            >
+                              {proveedor.activo ? "Desactivar" : "Reactivar"}
+                            </button>
+                          )}
+                        </div>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            )}
+          </Panel>
+        </>
+      )}
+
+      {pestana === "remitos" && (
+        <>
+          {puedeCrearRemito && (
+            <Panel title="Escanear remito o factura">
+              <p style={{ ...styles.text, marginTop: 0 }}>
+                Subí una foto clara. El OCR genera un borrador: primero revisás tipo,
+                proveedor, número y fecha; después revisás los productos. No se crea
+                ningún registro ni cambia el stock durante la lectura.
+              </p>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  capture="environment"
+                  className="app-input"
+                  style={{ ...styles.input, maxWidth: 430 }}
+                  onChange={(event) => {
+                    const archivo = event.target.files?.[0] || null;
+                    setArchivoDocumento(archivo);
+                    setDocumentoEscaneado(null);
+                    setPasoRemito(1);
+                    setAdvertenciasEscaneo([]);
+                    setTextoOcr("");
+                    setVistaPreviaOcr("");
+                    setProgresoEscaneo(0);
+                  }}
+                />
+                <Button
+                  onClick={analizarDocumentoCompra}
+                  disabled={!archivoDocumento || analizandoDocumento}
+                >
+                  {analizandoDocumento
+                    ? `Leyendo${progresoEscaneo > 0 ? ` ${progresoEscaneo}%` : "..."}`
+                    : "Leer documento gratis"}
+                </Button>
+                {archivoDocumento && (
+                  <SecondaryButton onClick={limpiarEscaneoDocumento}>
+                    Quitar archivo
+                  </SecondaryButton>
+                )}
+              </div>
+
+              <p style={{ color: "#64748b", fontSize: 12, marginBottom: 0 }}>
+                Formatos admitidos: JPG, PNG y WEBP. Para un PDF, sacá una captura de la página. No usa API ni créditos.
+              </p>
+
+              {documentoEscaneado && (
+                <div style={{ ...styles.historyBox, marginTop: 16 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div>
+                      <strong>Datos detectados</strong>
+                      <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+                        {documentoEscaneado.tipoDocumento === "factura"
+                          ? "Factura"
+                          : documentoEscaneado.tipoDocumento === "remito"
+                            ? "Remito"
+                            : "Documento"}
+                        {documentoEscaneado.numero
+                          ? ` · N.º ${documentoEscaneado.numero}`
+                          : " · Número pendiente"}
+                        {documentoEscaneado.proveedorNombre
+                          ? ` · ${documentoEscaneado.proveedorNombre}`
+                          : " · Proveedor pendiente"}
+                        {documentoEscaneado.pedido
+                          ? ` · Pedido ${documentoEscaneado.pedido}`
+                          : ""}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <strong>{money(Number(documentoEscaneado.total || 0))}</strong>
+                      <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>
+                        {documentoEscaneado.items.length} productos detectados
+                      </div>
+                    </div>
+                  </div>
+
+                  {vistaPreviaOcr && (
+                    <details style={{ marginTop: 14 }}>
+                      <summary style={{ cursor: "pointer", fontWeight: 700 }}>
+                        Ver imagen mejorada antes de la lectura
+                      </summary>
+                      <div
+                        style={{
+                          marginTop: 10,
+                          padding: 10,
+                          background: "#f8fafc",
+                          borderRadius: 10,
+                          overflow: "auto",
+                        }}
+                      >
+                        <img
+                          src={vistaPreviaOcr}
+                          alt="Documento mejorado para OCR"
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            maxHeight: 520,
+                            objectFit: "contain",
+                          }}
+                        />
+                      </div>
+                    </details>
+                  )}
+
+                  {textoOcr && (
+                    <details style={{ marginTop: 14 }}>
+                      <summary style={{ cursor: "pointer", fontWeight: 700 }}>
+                        Ver texto leído por el OCR
+                      </summary>
+                      <pre
+                        style={{
+                          marginTop: 10,
+                          padding: 12,
+                          maxHeight: 260,
+                          overflow: "auto",
+                          whiteSpace: "pre-wrap",
+                          background: "#f8fafc",
+                          borderRadius: 10,
+                          fontSize: 12,
+                        }}
+                      >
+                        {textoOcr}
+                      </pre>
+                    </details>
+                  )}
+
+                  {advertenciasEscaneo.length > 0 ? (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: 12,
+                        borderRadius: 10,
+                        background: "#fff7ed",
+                        color: "#9a3412",
+                      }}
+                    >
+                      {advertenciasEscaneo.map((advertencia) => (
+                        <div key={advertencia}>• {advertencia}</div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ color: "#166534", marginBottom: 0 }}>
+                      La lectura quedó guardada como borrador. Empezá por el paso 1.
+                    </p>
+                  )}
+                </div>
+              )}
+            </Panel>
+          )}
+
+          {puedeCrearRemito && (
+            <Panel title="Carga de compra en 3 pasos">
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                  gap: 8,
+                  marginBottom: 18,
+                }}
+              >
+                {[
+                  { paso: 1, titulo: "1. Documento" },
+                  { paso: 2, titulo: "2. Productos" },
+                  { paso: 3, titulo: "3. Confirmación" },
+                ].map((item) => (
+                  <button
+                    key={item.paso}
+                    type="button"
+                    onClick={() => {
+                      if (item.paso === 1) setPasoRemito(1);
+                      if (item.paso === 2 && datosDocumentoCompletos) {
+                        setPasoRemito(2);
+                      }
+                      if (
+                        item.paso === 3 &&
+                        datosDocumentoCompletos &&
+                        lineasProductoPendientes === 0
+                      ) {
+                        setPasoRemito(3);
+                      }
+                    }}
+                    style={{
+                      padding: "11px 8px",
+                      borderRadius: 10,
+                      border:
+                        pasoRemito === item.paso
+                          ? "2px solid #2563eb"
+                          : "1px solid #cbd5e1",
+                      background:
+                        pasoRemito === item.paso ? "#eff6ff" : "#ffffff",
+                      color:
+                        pasoRemito === item.paso ? "#1d4ed8" : "#475569",
+                      fontWeight: 800,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {item.titulo}
+                  </button>
+                ))}
+              </div>
+
+              {pasoRemito === 1 && (
+                <>
+                  <h3 style={{ marginTop: 0 }}>Paso 1: revisar el documento</h3>
+                  <p style={{ ...styles.text, marginTop: 0 }}>
+                    Confirmá los datos principales antes de revisar mercadería.
+                    El proveedor, el número y la fecha son obligatorios.
+                  </p>
+
+                  <div className="app-form-grid" style={styles.formGrid}>
+                    <select
+                      className="app-input"
+                      style={styles.input}
+                      value={formRemito.tipoDocumento}
+                      onChange={(event) =>
+                        setFormRemito({
+                          ...formRemito,
+                          tipoDocumento: event.target.value as
+                            | "remito"
+                            | "factura"
+                            | "otro",
+                        })
+                      }
+                    >
+                      <option value="remito">Remito</option>
+                      <option value="factura">Factura</option>
+                      <option value="otro">Otro documento</option>
+                    </select>
+
+                    <select
+                      className="app-input"
+                      style={{
+                        ...styles.input,
+                        borderColor: proveedorDocumentoValido
+                          ? undefined
+                          : "#dc2626",
+                      }}
+                      value={
+                        formRemito.crearProveedorAutomaticamente
+                          ? "__automatico__"
+                          : formRemito.proveedorId
+                      }
+                      onChange={(event) => {
+                        const valor = event.target.value;
+                        const proveedorIdNuevo =
+                          valor === "__automatico__" ? "" : valor;
+                        setFormRemito({
+                          ...formRemito,
+                          proveedorId: proveedorIdNuevo,
+                          crearProveedorAutomaticamente:
+                            valor === "__automatico__",
+                        });
+                        recalcularComparacionesParaProveedor(proveedorIdNuevo);
+                      }}
+                    >
+                      <option value="">Seleccionar proveedor</option>
+                      {(formRemito.proveedorNombreNuevo ||
+                        formRemito.proveedorCuitNuevo) && (
+                        <option value="__automatico__">
+                          Proponer proveedor nuevo: {formRemito.proveedorNombreNuevo || formRemito.proveedorCuitNuevo}
+                        </option>
+                      )}
+                      {proveedores
+                        .filter((item) => item.activo)
+                        .map((proveedor) => (
+                          <option key={proveedor.id} value={proveedor.id}>
+                            {proveedor.nombre}
+                          </option>
+                        ))}
+                    </select>
+
+                    <input
+                      className="app-input"
+                      style={{
+                        ...styles.input,
+                        borderColor: formRemito.numero.trim()
+                          ? undefined
+                          : "#dc2626",
+                      }}
+                      placeholder="Número del documento"
+                      value={formRemito.numero}
+                      onChange={(event) =>
+                        setFormRemito({
+                          ...formRemito,
+                          numero: event.target.value,
+                        })
+                      }
+                    />
+
+                    <input
+                      type="date"
+                      className="app-input"
+                      style={{
+                        ...styles.input,
+                        borderColor: formRemito.fecha
+                          ? undefined
+                          : "#dc2626",
+                      }}
+                      value={formRemito.fecha}
+                      onChange={(event) =>
+                        setFormRemito({
+                          ...formRemito,
+                          fecha: event.target.value,
+                        })
+                      }
+                    />
+
+                    <Input
+                      placeholder="Número de pedido (opcional)"
+                      value={formRemito.pedido}
+                      onChange={(valor) =>
+                        setFormRemito({ ...formRemito, pedido: valor })
+                      }
+                    />
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className="app-input"
+                      style={styles.input}
+                      placeholder="Total detectado (opcional)"
+                      value={formRemito.totalDocumentoDetectado}
+                      onChange={(event) =>
+                        setFormRemito({
+                          ...formRemito,
+                          totalDocumentoDetectado: event.target.value,
+                        })
+                      }
+                    />
+                  </div>
+
+                  {formRemito.crearProveedorAutomaticamente && (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: 12,
+                        borderRadius: 10,
+                        background: "#eff6ff",
+                        color: "#1d4ed8",
+                      }}
+                    >
+                      <strong>Proveedor nuevo propuesto</strong>
+                      <div
+                        className="app-form-grid"
+                        style={{ ...styles.formGrid, marginTop: 9 }}
+                      >
+                        <Input
+                          placeholder="Nombre o razón social"
+                          value={formRemito.proveedorNombreNuevo}
+                          onChange={(valor) =>
+                            setFormRemito({
+                              ...formRemito,
+                              proveedorNombreNuevo: valor,
+                            })
+                          }
+                        />
+                        <Input
+                          placeholder="CUIT"
+                          value={formRemito.proveedorCuitNuevo}
+                          onChange={(valor) =>
+                            setFormRemito({
+                              ...formRemito,
+                              proveedorCuitNuevo: valor,
+                            })
+                          }
+                        />
+                      </div>
+                      <div style={{ fontSize: 12, marginTop: 7 }}>
+                        Todavía no se creó. Se dará de alta únicamente después de
+                        la confirmación final.
+                      </div>
+                    </div>
+                  )}
+
+                  {documentoDuplicadoDetectado && (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: 12,
+                        borderRadius: 10,
+                        background: "#fef2f2",
+                        color: "#b91c1c",
+                      }}
+                    >
+                      <strong>Documento posiblemente duplicado</strong>
+                      <div style={{ marginTop: 4 }}>
+                        Ese proveedor ya tiene registrado el número {formRemito.numero}.
+                        Revisalo antes de continuar.
+                      </div>
+                    </div>
+                  )}
+
+                  {!datosDocumentoCompletos && !documentoDuplicadoDetectado && (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: 12,
+                        borderRadius: 10,
+                        background: "#fff7ed",
+                        color: "#9a3412",
+                      }}
+                    >
+                      Falta completar proveedor, número o fecha.
+                    </div>
+                  )}
+
+                  <textarea
+                    className="app-textarea"
+                    style={{ ...styles.textarea, marginTop: 14 }}
+                    rows={3}
+                    placeholder="Observaciones del documento"
+                    value={formRemito.observaciones}
+                    onChange={(event) =>
+                      setFormRemito({
+                        ...formRemito,
+                        observaciones: event.target.value,
+                      })
+                    }
+                  />
+
+                  <div className="app-actions" style={styles.actions}>
+                    <Button
+                      onClick={() => setPasoRemito(2)}
+                      disabled={!datosDocumentoCompletos}
+                    >
+                      Continuar a productos
+                    </Button>
+                    <SecondaryButton
+                      onClick={() => {
+                        limpiarRemito();
+                        limpiarEscaneoDocumento();
+                      }}
+                    >
+                      Limpiar borrador
+                    </SecondaryButton>
+                  </div>
+                </>
+              )}
+
+              {pasoRemito === 2 && (
+                <>
+                  <h3 style={{ marginTop: 0 }}>Paso 2: revisar productos</h3>
+                  <p style={{ ...styles.text, marginTop: 0 }}>
+                    Asociá cada renglón con un producto existente o dejalo como
+                    producto nuevo. En esta etapa todavía no se modifica el stock.
+                  </p>
+
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {lineasRemito.map((linea, indice) => {
+                      const lineaValida = Boolean(
+                        (linea.productoId ||
+                          (linea.crearProductoAutomaticamente &&
+                            linea.productoNombre.trim())) &&
+                          Number(linea.cantidad) > 0 &&
+                          Number(linea.costoUnitario) >= 0,
+                      );
+
+                      return (
+                        <div
+                          key={linea.clave}
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns:
+                              "minmax(220px, 2fr) 120px 150px auto",
+                            gap: 9,
+                            alignItems: "center",
+                            padding: 10,
+                            borderRadius: 10,
+                            border: lineaValida
+                              ? "1px solid #cbd5e1"
+                              : "1px solid #ef4444",
+                          }}
+                        >
+                          <select
+                            className="app-input"
+                            style={styles.input}
+                            value={
+                              linea.crearProductoAutomaticamente
+                                ? "__automatico__"
+                                : linea.productoId
+                            }
+                            onChange={(event) =>
+                              actualizarLinea(
+                                linea.clave,
+                                "productoId",
+                                event.target.value,
+                              )
+                            }
+                          >
+                            <option value="">Seleccionar producto</option>
+                            {linea.productoNombre && (
+                              <option value="__automatico__">
+                                Proponer producto nuevo: {linea.productoNombre || "Producto OCR"}
+                              </option>
+                            )}
+                            {productos
+                              .filter((item) => item.activo)
+                              .map((producto) => (
+                                <option key={producto.id} value={producto.id}>
+                                  {producto.nombre} · {producto.codigoBarras || producto.codigoInterno}
+                                </option>
+                              ))}
+                          </select>
+
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            className="app-input"
+                            style={styles.input}
+                            placeholder="Cantidad"
+                            value={linea.cantidad}
+                            onChange={(event) =>
+                              actualizarLinea(
+                                linea.clave,
+                                "cantidad",
+                                event.target.value,
+                              )
+                            }
+                          />
+
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="app-input"
+                            style={styles.input}
+                            placeholder="Costo unitario"
+                            value={linea.costoUnitario}
+                            onChange={(event) =>
+                              actualizarLinea(
+                                linea.clave,
+                                "costoUnitario",
+                                event.target.value,
+                              )
+                            }
+                          />
+
+                          <button
+                            type="button"
+                            style={styles.smallButtonDanger}
+                            disabled={lineasRemito.length === 1}
+                            onClick={() =>
+                              setLineasRemito((actuales) =>
+                                actuales.filter(
+                                  (item) => item.clave !== linea.clave,
+                                ),
+                              )
+                            }
+                          >
+                            Quitar {indice + 1}
+                          </button>
+
+                          <div
+                            style={{
+                              gridColumn: "1 / -1",
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "center",
+                              flexWrap: "wrap",
+                              fontSize: 12,
+                            }}
+                          >
+                            <Badge danger={!lineaValida}>
+                              {!lineaValida
+                                ? "Falta revisar"
+                                : linea.crearProductoAutomaticamente
+                                  ? "Producto nuevo"
+                                  : "Producto vinculado"}
+                            </Badge>
+                            {Number(linea.costoUnitario) <= 0 && (
+                              <span style={{ color: "#9a3412" }}>
+                                Sin costo: no se podrá calcular aumento.
+                              </span>
+                            )}
+                          </div>
+
+                          {linea.crearProductoAutomaticamente && (
+                            <div
+                              style={{
+                                gridColumn: "1 / -1",
+                                padding: 10,
+                                borderRadius: 9,
+                                background: "#f0fdf4",
+                                color: "#166534",
+                                fontSize: 13,
+                              }}
+                            >
+                              <strong>Producto nuevo propuesto</strong>
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns:
+                                    "minmax(220px, 2fr) minmax(150px, 1fr)",
+                                  gap: 8,
+                                  marginTop: 8,
+                                }}
+                              >
+                                <Input
+                                  placeholder="Nombre detectado"
+                                  value={linea.productoNombre}
+                                  onChange={(valor) =>
+                                    actualizarLinea(
+                                      linea.clave,
+                                      "productoNombre",
+                                      valor,
+                                    )
+                                  }
+                                />
+                                <Input
+                                  placeholder="Código del proveedor (opcional)"
+                                  value={linea.codigoProducto}
+                                  onChange={(valor) =>
+                                    actualizarLinea(
+                                      linea.clave,
+                                      "codigoProducto",
+                                      valor,
+                                    )
+                                  }
+                                />
+                              </div>
+                              <div style={{ marginTop: 6 }}>
+                                Se creará recién en el paso 3. El código interno se
+                                generará solo y el código de barras quedará pendiente.
+                              </div>
+                            </div>
+                          )}
+
+                          {linea.variacionCostoPorcentaje !== null &&
+                            linea.variacionCostoPorcentaje > 0 && (
+                              <div
+                                style={{
+                                  gridColumn: "1 / -1",
+                                  padding: 10,
+                                  borderRadius: 9,
+                                  background: "#fff7ed",
+                                  color: "#9a3412",
+                                  fontSize: 13,
+                                }}
+                              >
+                                <strong>
+                                  Aumento de costo: +
+                                  {linea.variacionCostoPorcentaje.toFixed(1)}%
+                                </strong>
+                                <div style={{ marginTop: 3 }}>
+                                  Costo anterior {money(Number(linea.costoAnterior || 0))} → nuevo {money(Number(linea.costoUnitario || 0))}.
+                                  {linea.precioVentaSugerido !== null
+                                    ? ` Precio de venta actual ${money(Number(linea.precioVentaActual || 0))}; sugerido: ${money(linea.precioVentaSugerido)}.`
+                                    : ""}
+                                </div>
+                              </div>
+                            )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    style={{ ...styles.smallButtonAlt, marginTop: 12 }}
+                    onClick={() =>
+                      setLineasRemito((actuales) => [
+                        ...actuales,
+                        crearLineaVacia(),
+                      ])
+                    }
+                  >
+                    + Agregar producto
+                  </button>
+
+                  {lineasProductoPendientes > 0 && (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: 12,
+                        borderRadius: 10,
+                        background: "#fef2f2",
+                        color: "#b91c1c",
+                      }}
+                    >
+                      {lineasProductoPendientes} {lineasProductoPendientes === 1 ? "fila necesita" : "filas necesitan"} revisión.
+                    </div>
+                  )}
+
+                  <div style={{ ...styles.row, marginTop: 14 }}>
+                    <strong>Total calculado</strong>
+                    <strong>{money(totalRemito)}</strong>
+                  </div>
+
+                  <div className="app-actions" style={styles.actions}>
+                    <SecondaryButton onClick={() => setPasoRemito(1)}>
+                      Volver al documento
+                    </SecondaryButton>
+                    <Button
+                      onClick={() => setPasoRemito(3)}
+                      disabled={lineasProductoPendientes > 0}
+                    >
+                      Revisar confirmación
+                    </Button>
+                  </div>
+                </>
+              )}
+
+              {pasoRemito === 3 && (
+                <>
+                  <h3 style={{ marginTop: 0 }}>Paso 3: confirmación final</h3>
+                  <p style={{ ...styles.text, marginTop: 0 }}>
+                    Hasta este momento todo sigue siendo un borrador. Al confirmar se
+                    guardará el documento, se crearán los registros nuevos y se
+                    actualizará el stock.
+                  </p>
+
+                  <div style={{ display: "grid", gap: 9 }}>
+                    <div style={styles.historyBox}>
+                      <strong>
+                        {formRemito.tipoDocumento === "factura"
+                          ? "Factura"
+                          : formRemito.tipoDocumento === "remito"
+                            ? "Remito"
+                            : "Documento"}{" "}
+                        {formRemito.numero}
+                      </strong>
+                      <div style={{ color: "#64748b", marginTop: 4 }}>
+                        Fecha: {formRemito.fecha}
+                        {formRemito.pedido
+                          ? ` · Pedido: ${formRemito.pedido}`
+                          : ""}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(auto-fit, minmax(150px, 1fr))",
+                        gap: 10,
+                      }}
+                    >
+                      <Card
+                        title="Productos"
+                        value={String(lineasRemito.length)}
+                      />
+                      <Card
+                        title="Productos nuevos"
+                        value={String(productosNuevosEnRevision)}
+                      />
+                      <Card
+                        title="Aumentos detectados"
+                        value={String(aumentosCostoDetectados.length)}
+                      />
+                      <Card
+                        title="Total calculado"
+                        value={money(totalRemito)}
+                      />
+                    </div>
+                  </div>
+
+                  {productosSinCostoEnRevision > 0 && (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: 12,
+                        borderRadius: 10,
+                        background: "#fff7ed",
+                        color: "#9a3412",
+                      }}
+                    >
+                      {productosSinCostoEnRevision} {productosSinCostoEnRevision === 1 ? "producto no tiene" : "productos no tienen"} costo. Se podrán ingresar al stock, pero no se detectarán aumentos para esas filas.
+                    </div>
+                  )}
+
+                  <div className="app-form-grid" style={{ ...styles.formGrid, marginTop: 14 }}>
+                    <select
+                      className="app-input"
+                      style={styles.input}
+                      value={formRemito.medioPago}
+                      onChange={(event) =>
+                        setFormRemito({
+                          ...formRemito,
+                          medioPago: event.target.value,
+                        })
+                      }
+                    >
+                      <option>Cuenta corriente</option>
+                      <option>Efectivo</option>
+                      <option>Transferencia</option>
+                      <option>Débito</option>
+                      <option>Crédito</option>
+                      <option>Cheque</option>
+                    </select>
+
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 9,
+                        fontWeight: 700,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={formRemito.pagado}
+                        onChange={(event) =>
+                          setFormRemito({
+                            ...formRemito,
+                            pagado: event.target.checked,
+                          })
+                        }
+                      />
+                      Ya fue pagado y debe registrarse como gasto
+                    </label>
+                  </div>
+
+                  {aumentosCostoDetectados.length > 0 && (
+                    <div
+                      style={{
+                        marginTop: 14,
+                        padding: 12,
+                        borderRadius: 10,
+                        background: "#fff7ed",
+                        color: "#9a3412",
+                      }}
+                    >
+                      <strong>
+                        {aumentosCostoDetectados.length} {aumentosCostoDetectados.length === 1 ? "aumento de costo detectado" : "aumentos de costo detectados"}
+                      </strong>
+                      <div style={{ fontSize: 12, marginTop: 4 }}>
+                        Los costos se actualizarán. Los precios de venta no se
+                        modificarán automáticamente.
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="app-actions" style={styles.actions}>
+                    <SecondaryButton onClick={() => setPasoRemito(2)}>
+                      Volver a productos
+                    </SecondaryButton>
+                    <Button
+                      onClick={registrarRemito}
+                      disabled={registrandoRemito}
+                    >
+                      {registrandoRemito
+                        ? "Registrando..."
+                        : "Confirmar e ingresar stock"}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </Panel>
+          )}
+
+          <Panel title="Historial de remitos">
+            {remitos.length === 0 ? (
+              <Empty text="Todavía no hay remitos registrados." />
+            ) : (
+              <div style={{ display: "grid", gap: 12 }}>
+                {remitos.map((remito) => (
+                  <div key={remito.id} style={styles.historyBox}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 14,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <div>
+                        <strong>
+                          {remito.proveedorNombre} · Remito {remito.numero}
+                        </strong>
+                        <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+                          {formatDate(remito.fecha)} · {remito.medioPago}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <strong>{money(remito.total)}</strong>
+                        <div style={{ marginTop: 5 }}>
+                          <Badge danger={!remito.pagado}>
+                            {remito.pagado ? "Pagado" : "Pendiente"}
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 10, color: "#475569", fontSize: 13 }}>
+                      {remito.items
+                        .map(
+                          (item) =>
+                            `${item.nombreProducto} × ${item.cantidad} (${money(item.costoUnitario)})`,
+                        )
+                        .join(" · ") || "Sin detalle"}
+                    </div>
+
+                    {!remito.pagado && puedePagarRemito && (
+                      <button
+                        type="button"
+                        style={{ ...styles.smallButton, marginTop: 12 }}
+                        onClick={() => pagarRemito(remito)}
+                      >
+                        Registrar pago
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+        </>
+      )}
+    </>
+  );
+}
+
 
 function Clientes({
   clientes,
@@ -7041,6 +10646,10 @@ function Ventas({
   const [filtroImporteMaximo, setFiltroImporteMaximo] = useState("");
   const [filtroNumeroVenta, setFiltroNumeroVenta] = useState("");
   const [mostrarRegistroRapido, setMostrarRegistroRapido] = useState(false);
+  const [codigoPendienteVinculacion, setCodigoPendienteVinculacion] =
+    useState("");
+  const [productoVincularId, setProductoVincularId] = useState("");
+  const [vinculandoCodigo, setVinculandoCodigo] = useState(false);
   const [guardandoProductoRapido, setGuardandoProductoRapido] = useState(false);
   const [registrandoVenta, setRegistrandoVenta] = useState(false);
   const procesandoVentaRef = useRef(false);
@@ -7055,7 +10664,9 @@ function Ventas({
   });
 
   lectorDeshabilitadoRef.current =
-    mostrarRegistroRapido || Boolean(ventaAnulando);
+    mostrarRegistroRapido ||
+    Boolean(codigoPendienteVinculacion) ||
+    Boolean(ventaAnulando);
 
   const total = carrito.reduce((acc, item) => acc + item.subtotal, 0);
   const montoRecibidoNumero = Number(montoRecibido.replace(",", ".")) || 0;
@@ -7088,7 +10699,9 @@ function Ventas({
       !terminoBusqueda ||
       producto.nombre.toLowerCase().includes(terminoBusqueda) ||
       producto.categoria.toLowerCase().includes(terminoBusqueda) ||
-      producto.codigo.toLowerCase().includes(terminoBusqueda);
+      producto.codigoInterno.toLowerCase().includes(terminoBusqueda) ||
+      producto.codigoBarras.toLowerCase().includes(terminoBusqueda) ||
+      producto.codigoProveedor.toLowerCase().includes(terminoBusqueda);
 
     return coincideCategoria && coincideBusqueda;
   });
@@ -7463,6 +11076,80 @@ function Ventas({
     enfocarBusquedaRapida();
   }
 
+  function pareceCodigoBarras(valor: string) {
+    return /^[0-9]{6,18}$/.test(valor.trim());
+  }
+
+  function abrirVinculacionCodigo(codigo: string) {
+    setCodigoPendienteVinculacion(codigo.trim());
+    setProductoVincularId("");
+    setBusquedaRapida("");
+  }
+
+  function cancelarVinculacionCodigo() {
+    if (vinculandoCodigo) return;
+    setCodigoPendienteVinculacion("");
+    setProductoVincularId("");
+    setBusquedaRapida("");
+    enfocarBusquedaRapida();
+  }
+
+  async function vincularCodigoAProductoExistente() {
+    const producto = productosActivos.find(
+      (item) => item.id === Number(productoVincularId),
+    );
+
+    if (!producto || !codigoPendienteVinculacion) {
+      alert("Seleccioná el producto al que corresponde este código.");
+      return;
+    }
+
+    if (
+      producto.codigoBarras &&
+      producto.codigoBarras !== codigoPendienteVinculacion &&
+      !confirm(
+        `${producto.nombre} ya tiene el código ${producto.codigoBarras}. ¿Querés reemplazarlo?`,
+      )
+    ) {
+      return;
+    }
+
+    setVinculandoCodigo(true);
+    const { error } = await supabase.rpc("asignar_codigo_barras_producto", {
+      p_producto_id: producto.id,
+      p_codigo_barras: codigoPendienteVinculacion,
+    });
+    setVinculandoCodigo(false);
+
+    if (error) {
+      alert("No se pudo vincular el código: " + error.message);
+      return;
+    }
+
+    const productoActualizado: Producto = {
+      ...producto,
+      codigoBarras: codigoPendienteVinculacion,
+    };
+
+    setCodigoPendienteVinculacion("");
+    setProductoVincularId("");
+    const agregado = agregarProductoRapido(productoActualizado);
+    await recargarDatos();
+    alert(
+      agregado
+        ? "Código vinculado y producto agregado al carrito."
+        : "Código vinculado correctamente.",
+    );
+    enfocarBusquedaRapida();
+  }
+
+  function crearProductoDesdeCodigoDesconocido() {
+    const codigo = codigoPendienteVinculacion;
+    setCodigoPendienteVinculacion("");
+    setProductoVincularId("");
+    abrirRegistroRapidoProducto(codigo);
+  }
+
   function abrirRegistroRapidoProducto(codigo: string) {
     setNuevoProductoRapido({
       nombre: "",
@@ -7542,7 +11229,7 @@ function Ventas({
 
     const codigoRepetido = productos.some(
       (producto) =>
-        producto.codigo.trim().toLowerCase() === codigo.toLowerCase(),
+        producto.codigoBarras.trim().toLowerCase() === codigo.toLowerCase(),
     );
 
     if (codigoRepetido) {
@@ -7557,7 +11244,10 @@ function Ventas({
       .insert({
         comercio_id: comercioActual.id,
         nombre,
-        codigo,
+        codigo: "",
+        codigo_interno: "",
+        codigo_barras: codigo,
+        codigo_proveedor: null,
         categoria,
         precio,
         costo,
@@ -7616,14 +11306,23 @@ function Ventas({
       const coincideBusqueda =
         producto.nombre.toLowerCase().includes(termino) ||
         producto.categoria.toLowerCase().includes(termino) ||
-        producto.codigo.toLowerCase().includes(termino);
+        producto.codigoBarras.toLowerCase().includes(termino) ||
+        producto.codigoInterno.toLowerCase().includes(termino) ||
+        producto.codigoProveedor.toLowerCase().includes(termino);
 
       return coincideCategoria && coincideBusqueda;
     });
 
-    const productoPorCodigo = productosActivos.find(
-      (producto) => producto.codigo.trim().toLowerCase() === termino,
-    );
+    const productoPorCodigo =
+      productosActivos.find(
+        (producto) => producto.codigoBarras.trim().toLowerCase() === termino,
+      ) ||
+      productosActivos.find(
+        (producto) => producto.codigoInterno.trim().toLowerCase() === termino,
+      ) ||
+      productosActivos.find(
+        (producto) => producto.codigoProveedor.trim().toLowerCase() === termino,
+      );
 
     if (productoPorCodigo) {
       const agregado = agregarProductoRapido(productoPorCodigo);
@@ -7668,7 +11367,12 @@ function Ventas({
     if (productosCoincidentes.length === 0) {
       const productoInactivo = productos.find(
         (producto) =>
-          producto.codigo.trim().toLowerCase() === termino && !producto.activo,
+          !producto.activo &&
+          [
+            producto.codigoBarras,
+            producto.codigoInterno,
+            producto.codigoProveedor,
+          ].some((codigo) => codigo.trim().toLowerCase() === termino),
       );
 
       if (productoInactivo) {
@@ -7680,7 +11384,11 @@ function Ventas({
         return;
       }
 
-      abrirRegistroRapidoProducto(valorOriginal);
+      if (pareceCodigoBarras(valorOriginal)) {
+        abrirVinculacionCodigo(valorOriginal);
+      } else {
+        abrirRegistroRapidoProducto(valorOriginal);
+      }
       return;
     }
 
@@ -7983,7 +11691,7 @@ function Ventas({
             value={busquedaRapida}
             onChange={(event) => setBusquedaRapida(event.target.value)}
             onKeyDown={manejarBusquedaRapida}
-            placeholder="Escaneá el código o buscá por nombre/categoría..."
+            placeholder="Escaneá el código de barras o buscá por nombre/código..."
             className="app-quick-search"
             style={styles.quickSearchInput}
             autoComplete="off"
@@ -8563,6 +12271,53 @@ function Ventas({
         )}
       </Panel>
 
+      {codigoPendienteVinculacion && (
+        <div className="app-modal-backdrop" style={styles.modalBackdrop}>
+          <div className="app-modal-box" style={styles.modalBox}>
+            <h3 style={styles.panelTitle}>Código no registrado</h3>
+            <p style={styles.text}>
+              El código <strong>{codigoPendienteVinculacion}</strong> puede
+              pertenecer a un producto creado desde OCR que todavía estaba pendiente.
+            </p>
+
+            <select
+              value={productoVincularId}
+              onChange={(event) => setProductoVincularId(event.target.value)}
+              style={styles.input}
+            >
+              <option value="">Seleccionar producto existente</option>
+              {productosActivos
+                .slice()
+                .sort((a, b) => {
+                  if (!a.codigoBarras && b.codigoBarras) return -1;
+                  if (a.codigoBarras && !b.codigoBarras) return 1;
+                  return a.nombre.localeCompare(b.nombre, "es");
+                })
+                .map((producto) => (
+                  <option key={producto.id} value={producto.id}>
+                    {producto.nombre} · {producto.codigoBarras || "Pendiente de código"}
+                  </option>
+                ))}
+            </select>
+
+            <div className="app-actions" style={styles.actions}>
+              <Button
+                onClick={vincularCodigoAProductoExistente}
+                disabled={vinculandoCodigo}
+              >
+                {vinculandoCodigo ? "Vinculando..." : "Vincular y agregar"}
+              </Button>
+              <SecondaryButton onClick={crearProductoDesdeCodigoDesconocido}>
+                Crear producto nuevo
+              </SecondaryButton>
+              <SecondaryButton onClick={cancelarVinculacionCodigo}>
+                Cancelar
+              </SecondaryButton>
+            </div>
+          </div>
+        </div>
+      )}
+
       {mostrarRegistroRapido && (
         <div className="app-modal-backdrop" style={styles.modalBackdrop}>
           <div className="app-modal-box" style={styles.modalBox}>
@@ -8585,7 +12340,7 @@ function Ventas({
               />
 
               <Input
-                placeholder="Código de barras o código interno"
+                placeholder="Código de barras"
                 value={nuevoProductoRapido.codigo}
                 onChange={(valor) =>
                   setNuevoProductoRapido({
@@ -11657,4 +15412,5 @@ const styles: Record<string, React.CSSProperties> = {
     borderTop: "1px solid #fee2e2",
     margin: "14px 0",
   },
+
 };

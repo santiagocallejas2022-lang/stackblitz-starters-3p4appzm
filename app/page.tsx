@@ -1107,7 +1107,10 @@ export default function Home() {
         fecha: v.fecha,
         clienteId: v.cliente_id || null,
         cliente: v.cliente_nombre,
-        medioPago: v.medio_pago,
+        medioPago:
+          !v.medio_pago || v.medio_pago === "not-provided"
+            ? "Venta online"
+            : v.medio_pago,
         total: Number(v.total),
         cajaId: v.caja_id,
         estado: v.estado === "anulada" ? "anulada" : "activa",
@@ -4448,6 +4451,115 @@ function Productos({
     XLSX.writeFile(libro, "plantilla-productos.xlsx");
   }
 
+
+  async function exportarProductos() {
+    if (!comercioActual) {
+      alert("No hay comercio asociado.");
+      return;
+    }
+
+    try {
+      const limite = 1000;
+      let desde = 0;
+      let todosLosProductos: any[] = [];
+
+      while (true) {
+        const { data, error } = await supabase
+          .from("productos")
+          .select(
+            "id,nombre,codigo,codigo_interno,codigo_barras,codigo_proveedor,categoria,precio,costo,stock,minimo,activo",
+          )
+          .eq("comercio_id", comercioActual.id)
+          .order("nombre", { ascending: true })
+          .range(desde, desde + limite - 1);
+
+        if (error) {
+          throw error;
+        }
+
+        const lote = data || [];
+        todosLosProductos = [...todosLosProductos, ...lote];
+
+        if (lote.length < limite) {
+          break;
+        }
+
+        desde += limite;
+      }
+
+      if (todosLosProductos.length === 0) {
+        alert("No hay productos cargados para exportar.");
+        return;
+      }
+
+      const filasExcel = todosLosProductos.map((producto) => ({
+        Nombre: producto.nombre || "",
+        Codigo:
+          producto.codigo_interno ||
+          producto.codigo ||
+          "",
+        "Codigo de barras": producto.codigo_barras || "",
+        "Codigo proveedor": producto.codigo_proveedor || "",
+        Categoria: producto.categoria || "",
+        Precio: Number(producto.precio || 0),
+        Costo: Number(producto.costo || 0),
+        Stock: Number(producto.stock || 0),
+        Minimo: Number(producto.minimo || 0),
+        Activo: producto.activo ? "Sí" : "No",
+      }));
+
+      const hoja = XLSX.utils.json_to_sheet(filasExcel);
+
+      hoja["!cols"] = [
+        { wch: 10 },
+        { wch: 35 },
+        { wch: 20 },
+        { wch: 22 },
+        { wch: 22 },
+        { wch: 20 },
+        { wch: 16 },
+        { wch: 16 },
+        { wch: 12 },
+        { wch: 15 },
+        { wch: 12 },
+      ];
+
+      const libro = XLSX.utils.book_new();
+
+      XLSX.utils.book_append_sheet(
+        libro,
+        hoja,
+        "Productos",
+      );
+
+      const fecha = new Date().toISOString().slice(0, 10);
+      const nombreComercioSeguro = String(
+        comercioActual.nombre || "comercio",
+      )
+        .trim()
+        .replace(/[\\/:*?"<>|]+/g, "-")
+        .replace(/\s+/g, "-");
+
+      XLSX.writeFile(
+        libro,
+        `productos-${nombreComercioSeguro}-${fecha}.xlsx`,
+      );
+
+      alert(
+        `Se exportaron ${todosLosProductos.length} productos correctamente.`,
+      );
+    } catch (error) {
+      console.error("Error al exportar productos:", error);
+
+      alert(
+        "No se pudieron exportar los productos: " +
+          (error instanceof Error
+            ? error.message
+            : String(error)),
+      );
+    }
+  }
+
   function limpiarImportacion() {
     setArchivoImportacionNombre("");
     setFilasImportacion([]);
@@ -4712,6 +4824,13 @@ function Productos({
               }}
             >
               Importar / migrar
+            </button>
+            <button
+              type="button"
+              style={styles.smallButtonAlt}
+              onClick={exportarProductos}
+            >
+              Exportar mis productos
             </button>
             <button
               type="button"
@@ -6797,10 +6916,10 @@ function ProveedoresRemitos({
             for (let valor = 0; valor < histograma.length; valor += 1) {
               acumulado += histograma[valor];
               if (acumulado >= objetivo) return valor;
-            };
+            }
 
             return 255;
-          }
+          };
 
           const negroReferencia = obtenerPercentil(0.03);
           const blancoReferencia = Math.max(
@@ -8382,19 +8501,19 @@ function ProveedoresRemitos({
                         gap: 10,
                       }}
                     >
-                      <Card
+                      <Kpi
                         title="Productos"
                         value={String(lineasRemito.length)}
                       />
-                      <Card
+                      <Kpi
                         title="Productos nuevos"
                         value={String(productosNuevosEnRevision)}
                       />
-                      <Card
+                      <Kpi
                         title="Aumentos detectados"
                         value={String(aumentosCostoDetectados.length)}
                       />
-                      <Card
+                      <Kpi
                         title="Total calculado"
                         value={money(totalRemito)}
                       />
@@ -13627,6 +13746,48 @@ function Header({
       </div>
       {action ? <div className="app-header-action">{action}</div> : null}
     </header>
+  );
+}
+
+
+function Kpi({
+  title,
+  value,
+}: {
+  title: string;
+  value: string;
+}) {
+  return (
+    <div
+      style={{
+        padding: 14,
+        border: "1px solid #e2e8f0",
+        borderRadius: 12,
+        background: "#ffffff",
+        minHeight: 84,
+      }}
+    >
+      <div
+        style={{
+          color: "#64748b",
+          fontSize: 12,
+          fontWeight: 700,
+          marginBottom: 6,
+        }}
+      >
+        {title}
+      </div>
+      <strong
+        style={{
+          display: "block",
+          color: "#0f172a",
+          fontSize: 20,
+          lineHeight: 1.2,
+        }}
+      >
+        {value}
+      </strong>
+    </div>
   );
 }
 

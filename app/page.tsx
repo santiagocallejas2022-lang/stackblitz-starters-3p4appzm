@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import QRCode from "qrcode";
 import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabase";
 
@@ -157,6 +158,8 @@ type Producto = {
   categoria: string;
   precio: number;
   costo: number;
+  tratamientoIva: "gravado" | "exento" | "no_gravado";
+  alicuotaIva: number;
   stock: number;
   minimo: number;
   activo: boolean;
@@ -189,6 +192,11 @@ type Cliente = {
   comercioId: number;
   nombre: string;
   telefono: string;
+  tipoDocumento: number | null;
+  numeroDocumento: string;
+  condicionIva: number | null;
+  domicilio: string;
+  email: string;
 };
 
 type ItemVenta = {
@@ -198,6 +206,104 @@ type ItemVenta = {
   precioUnitario: number;
   subtotal: number;
 };
+
+type ComprobanteArca = {
+  id: number;
+  comercio_id: number;
+  venta_id: number;
+  ambiente: "produccion";
+  tipo_comprobante: number;
+  punto_venta: number;
+  numero_comprobante: number;
+  fecha_emision: string;
+  emisor_cuit: string | null;
+  emisor_razon_social: string | null;
+  emisor_condicion_iva: string | null;
+  emisor_ingresos_brutos: string | null;
+  emisor_inicio_actividades: string | null;
+  emisor_domicilio_fiscal: string | null;
+  receptor_nombre: string | null;
+  receptor_tipo_doc: number | null;
+  receptor_nro_doc: string | null;
+  receptor_condicion_iva: number | null;
+  importe_total: number;
+  importe_neto: number;
+  importe_iva: number;
+  importe_exento: number;
+  importe_no_gravado: number;
+  importe_tributos?: number;
+  cae: string;
+  cae_vencimiento: string | null;
+  resultado: string;
+  leyenda_fiscal: string | null;
+  qr_url?: string | null;
+  tipoNombre?: string;
+};
+
+function construirQrFiscalFrontend(comprobante: ComprobanteArca) {
+  if (!comprobante?.cae) return "";
+
+  const payload: Record<string, string | number> = {
+    ver: 1,
+    fecha: String(comprobante.fecha_emision || "").slice(0, 10),
+    cuit: Number(String(comprobante.emisor_cuit || "").replace(/\D/g, "")),
+    ptoVta: Number(comprobante.punto_venta),
+    tipoCmp: Number(comprobante.tipo_comprobante),
+    nroCmp: Number(comprobante.numero_comprobante),
+    importe: Number(comprobante.importe_total),
+    moneda: "PES",
+    ctz: 1,
+    tipoCodAut: "E",
+    codAut: Number(comprobante.cae),
+  };
+
+  const docTipo = Number(comprobante.receptor_tipo_doc || 0);
+  const docNro = String(comprobante.receptor_nro_doc || "").replace(/\D/g, "");
+  if (docTipo > 0 && docTipo !== 99 && docNro) {
+    payload.tipoDocRec = docTipo;
+    payload.nroDocRec = Number(docNro);
+  }
+
+  const jsonQr = JSON.stringify(payload);
+  const bytes = new TextEncoder().encode(jsonQr);
+  let binario = "";
+  bytes.forEach((byte) => { binario += String.fromCharCode(byte); });
+  const base64 = btoa(binario);
+
+  return `https://www.afip.gob.ar/fe/qr/?p=${encodeURIComponent(base64)}`;
+}
+
+function QrFiscal({ url }: { url: string }) {
+  const [src, setSrc] = useState("");
+
+  useEffect(() => {
+    let vigente = true;
+    setSrc("");
+
+    if (!url) return () => { vigente = false; };
+
+    QRCode.toDataURL(url, { width: 180, margin: 1, errorCorrectionLevel: "M" })
+      .then((dataUrl) => { if (vigente) setSrc(dataUrl); })
+      .catch(() => { if (vigente) setSrc(""); });
+
+    return () => { vigente = false; };
+  }, [url]);
+
+  if (!url) return null;
+
+  return (
+    <div style={{ display: "grid", justifyItems: "center", gap: 6 }}>
+      {src ? (
+        <img src={src} alt="Código QR fiscal ARCA" width={180} height={180} />
+      ) : (
+        <div style={{ width: 180, height: 180, display: "grid", placeItems: "center", border: "1px solid #cbd5e1", fontSize: 12 }}>
+          Generando QR...
+        </div>
+      )}
+      <span style={{ fontSize: 10, textAlign: "center" }}>ARCA · Comprobante autorizado</span>
+    </div>
+  );
+}
 
 type Venta = {
   id: number;
@@ -475,6 +581,14 @@ function normalizarProducto(data: any): Producto {
     categoria: data.categoria,
     precio: Number(data.precio),
     costo: Number(data.costo),
+    tratamientoIva:
+      data.tratamiento_iva === "exento" || data.tratamiento_iva === "no_gravado"
+        ? data.tratamiento_iva
+        : "gravado",
+    alicuotaIva:
+      data.alicuota_iva === null || data.alicuota_iva === undefined
+        ? 21
+        : Number(data.alicuota_iva),
     stock: Number(data.stock),
     minimo: Number(data.minimo),
     activo: Boolean(data.activo),
@@ -1058,6 +1172,17 @@ export default function Home() {
           comercioId: c.comercio_id,
           nombre: c.nombre,
           telefono: c.telefono || "",
+          tipoDocumento:
+            c.tipo_documento === null || c.tipo_documento === undefined
+              ? null
+              : Number(c.tipo_documento),
+          numeroDocumento: c.numero_documento || "",
+          condicionIva:
+            c.condicion_iva === null || c.condicion_iva === undefined
+              ? null
+              : Number(c.condicion_iva),
+          domicilio: c.domicilio || "",
+          email: c.email || "",
         })),
       );
     } catch (error: any) {
@@ -2090,12 +2215,57 @@ function MiComercio({
   const puedeGestionarEquipo =
     rolUsuario === "admin_comercio" || rolUsuario === "admin_secretaria";
 
-  const [pestana, setPestana] = useState<"datos" | "equipo">("datos");
+  const [pestana, setPestana] = useState<"datos" | "arca" | "equipo">("datos");
   const [nombre, setNombre] = useState(comercioActual?.nombre || "");
   const [rubro, setRubro] = useState(comercioActual?.rubro || "");
   const [direccion, setDireccion] = useState(comercioActual?.direccion || "");
   const [telefono, setTelefono] = useState(comercioActual?.telefono || "");
   const [email, setEmail] = useState(comercioActual?.email || "");
+
+  const [arcaActivo, setArcaActivo] = useState(false);
+  const [arcaCuit, setArcaCuit] = useState("");
+  const [arcaPuntoVenta, setArcaPuntoVenta] = useState("");
+  const [arcaRazonSocial, setArcaRazonSocial] = useState("");
+  const [arcaCondicionIva, setArcaCondicionIva] = useState("");
+  const [arcaIngresosBrutos, setArcaIngresosBrutos] = useState("");
+  const [arcaInicioActividades, setArcaInicioActividades] = useState("");
+  const [arcaDomicilioFiscal, setArcaDomicilioFiscal] = useState("");
+  const [arcaEstado, setArcaEstado] = useState("sin_configurar");
+  const [arcaAutorizacionConfirmada, setArcaAutorizacionConfirmada] = useState(false);
+  const [arcaAutorizacionConfirmadaAt, setArcaAutorizacionConfirmadaAt] = useState<string | null>(null);
+  const [cargandoArca, setCargandoArca] = useState(false);
+  const [guardandoArca, setGuardandoArca] = useState(false);
+  const [probandoArca, setProbandoArca] = useState(false);
+
+  // Asistente de producción: estado real de arca_conexiones_produccion.
+  // Solo la Edge Function arca-onboarding puede guardar la modalidad.
+  type ModalidadArca = "sin_elegir" | "delegacion" | "certificado_propio";
+  type ConexionArca = {
+    comercio_id: number;
+    modalidad: ModalidadArca;
+    estado: string;
+    ultima_verificacion_at: string | null;
+    certificado_vencimiento: string | null;
+    mensaje_estado: string | null;
+  };
+  const [conexionProduccion, setConexionProduccion] = useState<ConexionArca | null>(null);
+  const [modalidadElegida, setModalidadElegida] = useState<ModalidadArca>("sin_elegir");
+  const [cargandoConexionProduccion, setCargandoConexionProduccion] = useState(false);
+  const [guardandoModalidadArca, setGuardandoModalidadArca] = useState(false);
+  const [errorConexionProduccion, setErrorConexionProduccion] = useState("");
+  const [mensajeConexionProduccion, setMensajeConexionProduccion] = useState("");
+  // El CSR es público; la clave privada nunca sale del servidor.
+  const [csrProduccion, setCsrProduccion] = useState("");
+  const [generandoCsrProduccion, setGenerandoCsrProduccion] = useState(false);
+  const [errorCsrProduccion, setErrorCsrProduccion] = useState("");
+  const [mensajeCsrProduccion, setMensajeCsrProduccion] = useState("");
+  const [archivoCertificado, setArchivoCertificado] = useState<File | null>(null);
+  const [subiendoCertificado, setSubiendoCertificado] = useState(false);
+  const [mensajeCertificado, setMensajeCertificado] = useState("");
+  const [errorCertificado, setErrorCertificado] = useState("");
+  const [verificandoArcaProduccion, setVerificandoArcaProduccion] = useState(false);
+  const [mensajeVerificacionArca, setMensajeVerificacionArca] = useState("");
+  const [errorVerificacionArca, setErrorVerificacionArca] = useState("");
 
   const [equipo, setEquipo] = useState<MiembroEquipo[]>([]);
   const [invitaciones, setInvitaciones] = useState<InvitacionComercio[]>([]);
@@ -2134,6 +2304,25 @@ function MiComercio({
   }, [puedeGestionarEquipo, pestana]);
 
   useEffect(() => {
+    if (!comercioActual?.id) {
+      setArcaActivo(false);
+      setArcaCuit("");
+      setArcaPuntoVenta("");
+      setArcaRazonSocial("");
+      setArcaCondicionIva("");
+      setArcaIngresosBrutos("");
+      setArcaInicioActividades("");
+      setArcaDomicilioFiscal("");
+      setArcaEstado("sin_configurar");
+      setArcaAutorizacionConfirmada(false);
+      setArcaAutorizacionConfirmadaAt(null);
+      return;
+    }
+
+    cargarConfiguracionArca(comercioActual.id);
+  }, [comercioActual?.id]);
+
+  useEffect(() => {
     if (
       pestana === "equipo" &&
       puedeGestionarEquipo &&
@@ -2142,6 +2331,512 @@ function MiComercio({
       cargarEquipoCompleto();
     }
   }, [pestana, puedeGestionarEquipo, comercioActual?.id]);
+
+  async function cargarConfiguracionArca(comercioId: number) {
+    setCargandoArca(true);
+
+    const { data, error } = await supabase
+      .from("arca_configuracion")
+      .select("activo, cuit, punto_venta, razon_social, condicion_iva, ingresos_brutos, inicio_actividades, domicilio_fiscal, estado, autorizacion_confirmada, autorizacion_confirmada_at, ambiente")
+      .eq("comercio_id", comercioId)
+      .maybeSingle();
+
+    setCargandoArca(false);
+
+    if (error) {
+      console.error("Error al cargar configuración ARCA:", error);
+      setArcaActivo(false);
+      setArcaCuit("");
+      setArcaPuntoVenta("");
+      setArcaRazonSocial("");
+      setArcaCondicionIva("");
+      setArcaIngresosBrutos("");
+      setArcaInicioActividades("");
+      setArcaDomicilioFiscal("");
+      setArcaEstado("sin_configurar");
+      setArcaAutorizacionConfirmada(false);
+      setArcaAutorizacionConfirmadaAt(null);
+      return;
+    }
+
+    if (!data) {
+      setArcaActivo(false);
+      setArcaCuit("");
+      setArcaPuntoVenta("");
+      setArcaRazonSocial("");
+      setArcaCondicionIva("");
+      setArcaIngresosBrutos("");
+      setArcaInicioActividades("");
+      setArcaDomicilioFiscal("");
+      setArcaEstado("sin_configurar");
+      setArcaAutorizacionConfirmada(false);
+      setArcaAutorizacionConfirmadaAt(null);
+      return;
+    }
+
+    setArcaActivo(Boolean(data.activo));
+    setArcaCuit(data.cuit || "");
+    setArcaPuntoVenta(
+      data.punto_venta === null || data.punto_venta === undefined
+        ? ""
+        : String(data.punto_venta),
+    );
+    setArcaRazonSocial(data.razon_social || "");
+    setArcaCondicionIva(data.condicion_iva || "");
+    setArcaIngresosBrutos(data.ingresos_brutos || "");
+    setArcaInicioActividades(data.inicio_actividades || "");
+    setArcaDomicilioFiscal(data.domicilio_fiscal || "");
+    setArcaEstado(data.estado || "sin_configurar");
+    setArcaAutorizacionConfirmada(Boolean(data.autorizacion_confirmada));
+    setArcaAutorizacionConfirmadaAt(data.autorizacion_confirmada_at || null);
+  }
+
+  useEffect(() => {
+    let cancelado = false;
+    const comercioId = comercioActual?.id;
+    if (pestana !== "arca" || !comercioId) {
+      setConexionProduccion(null);
+      setModalidadElegida("sin_elegir");
+      setErrorConexionProduccion("");
+      setMensajeConexionProduccion("");
+      return;
+    }
+
+    setCargandoConexionProduccion(true);
+    setErrorConexionProduccion("");
+    setMensajeConexionProduccion("");
+    setConexionProduccion(null);
+    setModalidadElegida("sin_elegir");
+
+    supabase
+      .from("arca_conexiones_produccion")
+      .select("comercio_id, modalidad, estado, ultima_verificacion_at, certificado_vencimiento, mensaje_estado")
+      .eq("comercio_id", comercioId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelado) return;
+        if (error) {
+          setErrorConexionProduccion("No pudimos consultar el estado de producción: " + error.message);
+        } else {
+          setConexionProduccion(data || null);
+          setModalidadElegida(data?.modalidad || "sin_elegir");
+        }
+        setCargandoConexionProduccion(false);
+      });
+
+    return () => { cancelado = true; };
+  }, [pestana, comercioActual?.id]);
+
+  useEffect(() => {
+    // No conservar una solicitud o certificado de otro comercio al cambiar de sesión/comercio.
+    setCsrProduccion("");
+    setErrorCsrProduccion("");
+    setMensajeCsrProduccion("");
+    setArchivoCertificado(null);
+    setErrorCertificado("");
+    setMensajeCertificado("");
+    setMensajeVerificacionArca("");
+    setErrorVerificacionArca("");
+  }, [comercioActual?.id]);
+
+  async function generarCsrProduccion() {
+    if (!comercioActual || !puedeGestionarEquipo || generandoCsrProduccion) return;
+    if (conexionProduccion?.modalidad !== "certificado_propio") {
+      setErrorCsrProduccion("Primero guardá la modalidad Certificado propio del comercio.");
+      return;
+    }
+    if (!/^\d{11}$/.test(arcaCuit.replace(/\D/g, "")) || !arcaRazonSocial.trim()) {
+      setErrorCsrProduccion("Antes completá y guardá CUIT y razón social en Datos fiscales.");
+      return;
+    }
+    if (!window.confirm(
+      `¿Preparar la solicitud de certificado de PRODUCCIÓN para este comercio (CUIT ${arcaCuit.replace(/\D/g, "")})? Solo hacelo con datos reales del futuro comercio. No habilita facturación ni emite comprobantes.`
+    )) return;
+
+    setGenerandoCsrProduccion(true);
+    setErrorCsrProduccion("");
+    setMensajeCsrProduccion("");
+    try {
+      const { data, error } = await supabase.functions.invoke("arca-csr", {
+        body: { accion: "generar_csr", comercio_id: comercioActual.id },
+      });
+      if (error) {
+        let detalle = error.message || "No se pudo llamar a la función.";
+        try {
+          const respuesta = error.context;
+          if (respuesta && typeof respuesta.json === "function") {
+            const cuerpo = await respuesta.json();
+            if (typeof cuerpo?.error === "string") detalle = cuerpo.error;
+          }
+        } catch { /* La respuesta HTTP puede no contener JSON. */ }
+        throw new Error(detalle);
+      }
+      if (!data?.ok || typeof data.csr_pem !== "string" ||
+          !data.csr_pem.includes("-----BEGIN CERTIFICATE REQUEST-----")) {
+        throw new Error(data?.error || "El servidor no devolvió una solicitud CSR válida.");
+      }
+      setCsrProduccion(data.csr_pem);
+      setMensajeCsrProduccion(data.reutilizado
+        ? "Recuperamos la solicitud existente: no se generó otra clave privada."
+        : "Solicitud CSR generada. La clave privada quedó cifrada únicamente en el servidor."
+      );
+    } catch (error: any) {
+      setErrorCsrProduccion(error?.message || "No se pudo preparar la solicitud.");
+    } finally {
+      setGenerandoCsrProduccion(false);
+    }
+  }
+
+  async function subirCertificadoProduccion() {
+    if (!comercioActual || !archivoCertificado || subiendoCertificado) return;
+
+    setSubiendoCertificado(true);
+    setErrorCertificado("");
+    setMensajeCertificado("");
+
+    try {
+      let contenidoCertificado = "";
+
+      const texto = await archivoCertificado.text();
+
+      if (texto.includes("-----BEGIN CERTIFICATE-----")) {
+        contenidoCertificado = texto;
+      } else {
+        const buffer = await archivoCertificado.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+
+        let binario = "";
+        for (let i = 0; i < bytes.length; i += 8192) {
+          binario += String.fromCharCode(...bytes.subarray(i, i + 8192));
+        }
+
+        contenidoCertificado = btoa(binario);
+      }
+
+      const { data, error } = await supabase.functions.invoke("arca-certificado", {
+        body: {
+          accion: "guardar_certificado",
+          comercio_id: comercioActual.id,
+          certificado: contenidoCertificado,
+        },
+      });
+
+      if (error) {
+        let detalle = error.message || "No se pudo llamar al servidor.";
+
+        try {
+          const respuesta = error.context;
+          if (respuesta && typeof respuesta.json === "function") {
+            const cuerpo = await respuesta.json();
+            if (typeof cuerpo?.error === "string") detalle = cuerpo.error;
+          }
+        } catch {
+          // La respuesta HTTP puede no contener JSON.
+        }
+
+        throw new Error(detalle);
+      }
+
+      if (!data?.ok) {
+        throw new Error(data?.error || "No se pudo validar el certificado.");
+      }
+
+      setMensajeCertificado(data.mensaje || "Certificado cargado correctamente.");
+
+      setConexionProduccion((actual) =>
+        actual
+          ? {
+              ...actual,
+              estado: data.estado || "pendiente_verificacion",
+              certificado_vencimiento:
+                data.certificado_vencimiento || actual.certificado_vencimiento,
+              mensaje_estado: data.mensaje || "Certificado cargado.",
+            }
+          : actual,
+      );
+
+      setArchivoCertificado(null);
+    } catch (error: any) {
+      setErrorCertificado(error?.message || "No se pudo cargar el certificado.");
+    } finally {
+      setSubiendoCertificado(false);
+    }
+  }
+
+  async function verificarConexionArcaProduccion() {
+    if (!comercioActual || !puedeGestionarEquipo || verificandoArcaProduccion) return;
+
+    setVerificandoArcaProduccion(true);
+    setMensajeVerificacionArca("");
+    setErrorVerificacionArca("");
+
+    try {
+      const { data, error } = await supabase.functions.invoke("arca-verificar", {
+        body: {
+          accion: "verificar_conexion",
+          comercio_id: comercioActual.id,
+        },
+      });
+
+      if (error) {
+        let detalle = error.message || "No se pudo verificar la conexión con ARCA.";
+
+        try {
+          const respuesta = error.context;
+          if (respuesta && typeof respuesta.json === "function") {
+            const cuerpo = await respuesta.json();
+            if (typeof cuerpo?.error === "string") detalle = cuerpo.error;
+          }
+        } catch {
+          // La respuesta HTTP puede no contener JSON.
+        }
+
+        throw new Error(detalle);
+      }
+
+      if (!data?.ok) {
+        throw new Error(data?.error || "ARCA no confirmó la conexión.");
+      }
+
+      setConexionProduccion((actual) =>
+        actual
+          ? {
+              ...actual,
+              estado: data.estado || "conectado",
+              ultima_verificacion_at:
+                data.ultima_verificacion_at || new Date().toISOString(),
+              mensaje_estado:
+                data.mensaje || "Conexión con ARCA verificada correctamente.",
+            }
+          : actual,
+      );
+
+      setArcaActivo(true);
+      setArcaEstado("conectado");
+      setArcaAutorizacionConfirmada(true);
+      setArcaAutorizacionConfirmadaAt(
+        data.ultima_verificacion_at || new Date().toISOString(),
+      );
+
+      if (data.cuit) setArcaCuit(String(data.cuit));
+      if (data.punto_venta !== undefined && data.punto_venta !== null) {
+        setArcaPuntoVenta(String(data.punto_venta));
+      }
+
+      setMensajeVerificacionArca(
+        data.mensaje ||
+          "Conexión con ARCA confirmada. El comercio quedó habilitado para facturación electrónica de producción.",
+      );
+    } catch (error: any) {
+      setErrorVerificacionArca(
+        error?.message || "No se pudo verificar la conexión con ARCA.",
+      );
+    } finally {
+      setVerificandoArcaProduccion(false);
+    }
+  }
+
+  async function guardarModalidadProduccion() {
+    if (!comercioActual || !puedeGestionarEquipo) return;
+    if (modalidadElegida !== "delegacion" && modalidadElegida !== "certificado_propio") {
+      setErrorConexionProduccion("Elegí una modalidad para continuar.");
+      return;
+    }
+    if (["conectado", "suspendido", "esperando_autorizacion", "pendiente_verificacion"].includes(conexionProduccion?.estado || "")) {
+      setErrorConexionProduccion("Hay una conexión en curso, verificada o suspendida. Su cambio requiere un procedimiento seguro.");
+      return;
+    }
+
+    setGuardandoModalidadArca(true);
+    setErrorConexionProduccion("");
+    setMensajeConexionProduccion("");
+    try {
+      const { data, error } = await supabase.functions.invoke("arca-onbording", {
+        body: {
+          accion: "seleccionar_modalidad",
+          comercio_id: comercioActual.id,
+          modalidad: modalidadElegida,
+        },
+      });
+      if (error) throw error;
+      if (!data?.ok || !data?.conexion) {
+        throw new Error(data?.error || "No se pudo guardar la modalidad.");
+      }
+      setConexionProduccion(data.conexion);
+      setModalidadElegida(data.conexion.modalidad);
+      setMensajeConexionProduccion(data.mensaje || "Modalidad guardada.");
+    } catch (error: any) {
+      setErrorConexionProduccion(
+        "No se pudo guardar la elección: " + (error?.message || String(error)),
+      );
+    } finally {
+      setGuardandoModalidadArca(false);
+    }
+  }
+
+  async function guardarConfiguracionArca() {
+    if (!comercioActual) {
+      alert("No hay comercio asociado.");
+      return;
+    }
+
+    const cuitNormalizado = arcaCuit.replace(/\D/g, "");
+    if (cuitNormalizado && !/^\d{11}$/.test(cuitNormalizado)) {
+      alert("Si completás el CUIT, ingresá los 11 números.");
+      return;
+    }
+
+    const puntoVentaNormalizado = Number(arcaPuntoVenta);
+    if (arcaPuntoVenta && (!Number.isInteger(puntoVentaNormalizado) || puntoVentaNormalizado <= 0)) {
+      alert("Ingresá un punto de venta Web Services válido.");
+      return;
+    }
+
+    setGuardandoArca(true);
+
+    try {
+      // Primero comprobamos si existe: un UPDATE conserva el modo prueba,
+      // el punto de homologación, el estado de producción y las autorizaciones.
+      const { data: existente, error: errorBuscar } = await supabase
+        .from("arca_configuracion")
+        .select("comercio_id")
+        .eq("comercio_id", comercioActual.id)
+        .maybeSingle();
+
+      if (errorBuscar) throw errorBuscar;
+
+      const datosFiscales = {
+        cuit: cuitNormalizado || null,
+        punto_venta: arcaPuntoVenta ? puntoVentaNormalizado : null,
+        razon_social: arcaRazonSocial.trim() || null,
+        condicion_iva: arcaCondicionIva || null,
+        ingresos_brutos: arcaIngresosBrutos.trim() || null,
+        inicio_actividades: arcaInicioActividades || null,
+        domicilio_fiscal: arcaDomicilioFiscal.trim() || null,
+        updated_at: new Date().toISOString(),
+      };
+
+      // Si es un comercio nuevo, creamos la configuración REAL desactivada.
+      // No encendemos facturación de producción desde esta pantalla.
+      const operacion = existente
+        ? supabase
+            .from("arca_configuracion")
+            .update(datosFiscales)
+            .eq("comercio_id", comercioActual.id)
+        : supabase
+            .from("arca_configuracion")
+            .insert({
+              comercio_id: comercioActual.id,
+              activo: false,
+              estado: "desactivado",
+              ambiente: "produccion",
+              ...datosFiscales,
+            });
+
+      const { data, error } = await operacion
+        .select("activo, cuit, punto_venta, razon_social, condicion_iva, ingresos_brutos, inicio_actividades, domicilio_fiscal, estado, autorizacion_confirmada, autorizacion_confirmada_at, ambiente")
+        .single();
+
+      if (error) throw error;
+
+      setArcaActivo(Boolean(data.activo));
+      setArcaCuit(data.cuit || "");
+      setArcaPuntoVenta(
+        data.punto_venta === null || data.punto_venta === undefined
+          ? ""
+          : String(data.punto_venta),
+      );
+      setArcaRazonSocial(data.razon_social || "");
+      setArcaCondicionIva(data.condicion_iva || "");
+      setArcaIngresosBrutos(data.ingresos_brutos || "");
+      setArcaInicioActividades(data.inicio_actividades || "");
+      setArcaDomicilioFiscal(data.domicilio_fiscal || "");
+      setArcaEstado(data.estado || "sin_configurar");
+      setArcaAutorizacionConfirmada(Boolean(data.autorizacion_confirmada));
+      setArcaAutorizacionConfirmadaAt(data.autorizacion_confirmada_at || null);
+
+      alert(
+        "Datos fiscales guardados.",
+      );
+    } catch (error: any) {
+      alert(
+        "No se pudieron guardar los datos fiscales: " +
+          (error?.message || String(error)),
+      );
+    } finally {
+      setGuardandoArca(false);
+    }
+  }
+
+  async function probarConexionArca() {
+    if (!comercioActual) {
+      alert("No hay comercio asociado.");
+      return;
+    }
+
+    setProbandoArca(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "arca-facturacion",
+        {
+          body: {
+            comercio_id: comercioActual.id,
+          },
+        },
+      );
+
+      if (error) {
+        alert("No se pudo probar la conexión con ARCA: " + error.message);
+        return;
+      }
+
+      if (!data?.ok) {
+        alert(
+          "ARCA respondió con un problema: " +
+            (data?.error || "Error desconocido."),
+        );
+        return;
+      }
+
+      if (
+        data.modoPrueba === true &&
+        data.ambiente === "homologacion" &&
+        data.wsaa === "conectado" &&
+        data.wsfe === "conectado"
+      ) {
+        const ultimo = data.diagnosticoFacturaC?.ultimoAutorizado;
+        const detalle =
+          typeof ultimo === "number"
+            ? ` Última Factura C autorizada en este punto: N.º ${ultimo}.`
+            : "";
+        alert(
+          "Conexión de HOMOLOGACIÓN correcta." +
+            detalle +
+            " La facturación real no se activó.",
+        );
+        return;
+      }
+
+      if (Array.isArray(data.errores) && data.errores.length > 0) {
+        const detalle = data.errores
+          .map((item: any) => `${item.codigo}: ${item.mensaje}`)
+          .join("\n");
+
+        alert("La conexión llegó a ARCA, pero devolvió:\n" + detalle);
+        return;
+      }
+
+      alert("La consulta a ARCA finalizó. No se activó facturación real.");
+    } catch (error: any) {
+      alert(
+        "No se pudo probar la conexión con ARCA: " +
+          (error?.message || error),
+      );
+    } finally {
+      setProbandoArca(false);
+    }
+  }
 
   async function guardarDatosComercio() {
     if (!comercioActual) {
@@ -2632,6 +3327,29 @@ function MiComercio({
           Datos del comercio
         </button>
 
+
+        <button
+          type="button"
+          onClick={() => setPestana("arca")}
+          style={{
+            padding: "11px 18px",
+            borderRadius: 10,
+            cursor: "pointer",
+            fontWeight: 700,
+            border:
+              pestana === "arca"
+                ? "1px solid #dc2626"
+                : "1px solid #cbd5e1",
+            background:
+              pestana === "arca"
+                ? "linear-gradient(135deg, #ef4444, #b91c1c)"
+                : "#ffffff",
+            color: pestana === "arca" ? "#ffffff" : "#334155",
+          }}
+        >
+          Facturación ARCA
+        </button>
+
         {puedeGestionarEquipo && (
           <button
             type="button"
@@ -2697,6 +3415,399 @@ function MiComercio({
               right={comercioActual?.telefono || "Sin teléfono"}
             />
             <Row left="Estado" right={comercioActual?.estado || "activo"} />
+          </Panel>
+
+        </>
+      )}
+
+
+      {pestana === "arca" && (
+        <>
+          <Panel title="Conectar facturación real · asistente">
+            <div style={{ display: "grid", gap: 16 }}>
+              <div style={{ padding: 14, border: "1px solid #bfdbfe", borderRadius: 12, background: "#eff6ff", color: "#1e3a8a", fontSize: 14 }}>
+                Conectá este comercio con ARCA para emitir facturas electrónicas con CAE real. La conexión es opcional: el resto del sistema funciona aunque ARCA no esté configurado. Nunca ingreses tu Clave Fiscal ni pegues claves privadas aquí.
+              </div>
+              {cargandoConexionProduccion ? (
+                <p style={{ color: "#475569" }}>Consultando el estado de conexión...</p>
+              ) : errorConexionProduccion.startsWith("No pudimos consultar") ? (
+                <p role="alert" style={{ color: "#991b1b" }}>{errorConexionProduccion}</p>
+              ) : (
+                <>
+                  <div style={{ padding: 14, border: "1px solid #e2e8f0", borderRadius: 12 }}>
+                    <strong style={{ display: "block", marginBottom: 5 }}>Estado de producción</strong>
+                    <span style={{ fontSize: 14, color: conexionProduccion?.estado === "conectado" ? "#166534" : "#92400e" }}>
+                      {conexionProduccion?.estado === "conectado" && conexionProduccion.ultima_verificacion_at
+                        ? "Conexión registrada como verificada"
+                        : conexionProduccion?.estado === "esperando_autorizacion"
+                          ? "Esperando autorización (sin emisión habilitada)"
+                          : conexionProduccion?.estado === "pendiente_verificacion"
+                            ? "Pendiente de verificación (sin emisión habilitada)"
+                            : conexionProduccion?.estado === "error"
+                              ? "Error de configuración (sin emisión habilitada)"
+                              : conexionProduccion?.estado === "suspendido"
+                                ? "Suspendida"
+                                : "Sin configurar · emisión real desactivada"}
+                    </span>
+                    {conexionProduccion?.mensaje_estado && (
+                      <p style={{ fontSize: 13, color: "#475569" }}>{conexionProduccion.mensaje_estado}</p>
+                    )}
+                  </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <strong>1. Conexión mediante certificado propio</strong>
+                    <label style={{ display: "flex", gap: 10, padding: 12, border: "1px solid #cbd5e1", borderRadius: 10, cursor: "pointer" }}>
+                      <input type="radio" name="arca-modalidad-produccion" value="certificado_propio"
+                        disabled={!puedeGestionarEquipo || ["conectado", "suspendido", "esperando_autorizacion", "pendiente_verificacion"].includes(conexionProduccion?.estado || "")}
+                        checked={modalidadElegida === "certificado_propio"}
+                        onChange={() => setModalidadElegida("certificado_propio")} />
+                      <span><strong>Certificado digital del comercio</strong><br />
+                        <span style={{ color: "#64748b", fontSize: 13 }}>El comercio administra su certificado digital de producción y autoriza el servicio WSFE.</span>
+                      </span>
+                    </label>
+                    {puedeGestionarEquipo && (
+                      <Button onClick={guardarModalidadProduccion}
+                        disabled={guardandoModalidadArca || modalidadElegida === "sin_elegir" || ["conectado", "suspendido", "esperando_autorizacion", "pendiente_verificacion"].includes(conexionProduccion?.estado || "")}>
+                        {guardandoModalidadArca ? "Guardando elección..." : "Guardar modalidad de conexión"}
+                      </Button>
+                    )}
+                    {mensajeConexionProduccion && <p role="status" style={{ color: "#166534", fontSize: 14 }}>{mensajeConexionProduccion}</p>}
+                    {errorConexionProduccion && <p role="alert" style={{ color: "#991b1b", fontSize: 14 }}>{errorConexionProduccion}</p>}
+                  </div>
+
+                  {conexionProduccion?.modalidad !== "sin_elegir" && conexionProduccion?.modalidad && (
+                    <div style={{ display: "grid", gap: 12, padding: 14, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12 }}>
+                      <strong>2. Preparación en ARCA</strong>
+                      {conexionProduccion.modalidad === "delegacion" ? (
+                        <>
+                          <p style={{ fontSize: 14, color: "#334155", margin: 0 }}>
+                            El comercio deberá delegar el Web Service al proveedor identificado, desde el Administrador de Relaciones.
+                            Todavía no configuramos el CUIT del proveedor: <strong>no realices una delegación a un CUIT desconocido.</strong>
+                          </p>
+                          <a href="https://www.arca.gob.ar/ws/WSAA/ADMINREL.DelegarWS.pdf"
+                            target="_blank" rel="noopener noreferrer" style={{ color: "#1d4ed8", textDecoration: "underline" }}>
+                            Instrucciones oficiales de delegación de Web Services ↗
+                          </a>
+                        </>
+                      ) : (
+                        <>
+                          <p style={{ fontSize: 14, color: "#334155", margin: 0 }}>
+                            El comercio debe gestionar su certificado digital de producción, asociarlo a WSFE y disponer de un punto de venta Web Services. El certificado público puede cargarse acá; la clave privada generada por el sistema permanece cifrada en el servidor.
+                          </p>
+                          <div style={{ padding: 12, borderRadius: 10, border: "1px solid #bfdbfe", background: "#eff6ff", display: "grid", gap: 10 }}>
+                            <strong>Generar solicitud de certificado (CSR)</strong>
+                            <p style={{ margin: 0, color: "#334155", fontSize: 13 }}>
+                              Guardá primero el CUIT y la razón social reales del comercio. El servidor genera la solicitud y conserva la clave privada cifrada; la clave nunca se descarga.
+                            </p>
+                            {puedeGestionarEquipo && (
+                              <Button onClick={generarCsrProduccion}
+                                disabled={generandoCsrProduccion || !comercioActual || conexionProduccion?.modalidad !== "certificado_propio"}>
+                                {generandoCsrProduccion ? "Preparando solicitud..." : "Generar o recuperar solicitud CSR"}
+                              </Button>
+                            )}
+                            {mensajeCsrProduccion && <p role="status" style={{ margin: 0, color: "#166534", fontSize: 13 }}>{mensajeCsrProduccion}</p>}
+                            {errorCsrProduccion && <p role="alert" style={{ margin: 0, color: "#991b1b", fontSize: 13 }}>{errorCsrProduccion}</p>}
+                            {csrProduccion && (
+                              <>
+                                <a
+                                  download={`solicitud-certificado-comercio-${comercioActual?.id || "nuevo"}.csr`}
+                                  href={`data:application/pkcs10;charset=utf-8,${encodeURIComponent(csrProduccion)}`}
+                                  style={{ color: "#1d4ed8", textDecoration: "underline", fontWeight: 600 }}>
+                                  Descargar archivo .csr ↓
+                                </a>
+                                <p style={{ margin: 0, color: "#475569", fontSize: 13 }}>
+                                  Presentá este CSR en ARCA para solicitar el certificado correspondiente al CUIT del comercio. No compartas ni subas una clave privada.
+                                </p>
+                              </>
+                            )}
+                            <div
+                              style={{
+                                marginTop: 8,
+                                padding: 12,
+                                border: "1px solid #cbd5e1",
+                                borderRadius: 10,
+                                display: "grid",
+                                gap: 10,
+                                background: "#ffffff",
+                              }}
+                            >
+                              <strong>Subir certificado emitido por ARCA</strong>
+
+                              <p style={{ margin: 0, fontSize: 13, color: "#475569" }}>
+                                Después de presentar el CSR en ARCA, descargá el certificado de producción y cargalo acá.
+                              </p>
+
+                              <input
+                                type="file"
+                                accept=".crt,.cer,.pem,application/x-x509-ca-cert"
+                                disabled={subiendoCertificado}
+                                onChange={(e) => {
+                                  setArchivoCertificado(e.target.files?.[0] || null);
+                                  setErrorCertificado("");
+                                  setMensajeCertificado("");
+                                }}
+                              />
+
+                              {archivoCertificado && (
+                                <p style={{ margin: 0, fontSize: 13, color: "#334155" }}>
+                                  Archivo seleccionado: <strong>{archivoCertificado.name}</strong>
+                                </p>
+                              )}
+
+                              {puedeGestionarEquipo && (
+                                <Button
+                                  onClick={subirCertificadoProduccion}
+                                  disabled={!archivoCertificado || subiendoCertificado}
+                                >
+                                  {subiendoCertificado
+                                    ? "Validando certificado..."
+                                    : "Subir y validar certificado"}
+                                </Button>
+                              )}
+
+                              {mensajeCertificado && (
+                                <p role="status" style={{ margin: 0, color: "#166534", fontSize: 13 }}>
+                                  {mensajeCertificado}
+                                </p>
+                              )}
+
+                              {errorCertificado && (
+                                <p role="alert" style={{ margin: 0, color: "#991b1b", fontSize: 13 }}>
+                                  {errorCertificado}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          <a href="https://www.arca.gob.ar/ws/documentacion/certificados.asp"
+                            target="_blank" rel="noopener noreferrer" style={{ color: "#1d4ed8", textDecoration: "underline" }}>
+                            Guía oficial de certificados para producción ↗
+                          </a>
+                        </>
+                      )}
+                      <a href="https://www.arca.gob.ar/fe/emision-autorizacion/solicitud-autorizacion.asp"
+                        target="_blank" rel="noopener noreferrer" style={{ color: "#1d4ed8", textDecoration: "underline" }}>
+                        Requisitos oficiales del punto de venta ↗
+                      </a>
+                      <strong>3. Verificar credenciales y autorización</strong>
+                      <p style={{ margin: 0, color: "#64748b", fontSize: 14 }}>
+                        El sistema comprobará el certificado contra WSAA de producción, consultará WSFE y verificará que el punto de venta configurado esté habilitado.
+                      </p>
+                      {puedeGestionarEquipo && (
+                        <Button
+                          onClick={verificarConexionArcaProduccion}
+                          disabled={verificandoArcaProduccion || !comercioActual}
+                        >
+                          {verificandoArcaProduccion
+                            ? "Verificando con ARCA..."
+                            : conexionProduccion?.estado === "conectado"
+                              ? "Volver a verificar conexión con ARCA"
+                              : "Verificar conexión con ARCA"}
+                        </Button>
+                      )}
+                      {mensajeVerificacionArca && (
+                        <p role="status" style={{ margin: 0, color: "#166534", fontSize: 13 }}>
+                          {mensajeVerificacionArca}
+                        </p>
+                      )}
+                      {errorVerificacionArca && (
+                        <p role="alert" style={{ margin: 0, color: "#991b1b", fontSize: 13 }}>
+                          {errorVerificacionArca}
+                        </p>
+                      )}
+                      <strong>4. Estado de facturación real</strong>
+                      <p style={{ margin: 0, color: conexionProduccion?.estado === "conectado" ? "#166534" : "#64748b", fontSize: 14 }}>
+                        {conexionProduccion?.estado === "conectado"
+                          ? "ARCA producción conectado. La emisión fiscal está habilitada para este comercio."
+                          : "La emisión fiscal seguirá deshabilitada hasta que ARCA confirme la conexión."}
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </Panel>
+          <Panel title="Facturación ARCA">
+            <div style={{ display: "grid", gap: 16 }}>
+              <div
+                style={{
+                  padding: 14,
+                  borderRadius: 12,
+                  border: "1px solid #e2e8f0",
+                  background: "#f8fafc",
+                }}
+              >
+                <strong style={{ display: "block", color: "#0f172a" }}>
+                  Facturación electrónica opcional
+                </strong>
+                <p style={{ margin: "6px 0 0", color: "#64748b", fontSize: 14 }}>
+                  ARCA es opcional. Completá los datos fiscales y el punto de venta Web Services; la emisión se habilita únicamente después de verificar la conexión de producción.
+                </p>
+              </div>
+
+              {cargandoArca ? (
+                <Empty text="Cargando configuración ARCA..." />
+              ) : (
+                <>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      cursor: "pointer",
+                      fontWeight: 700,
+                      color: "#0f172a",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={arcaActivo}
+                      disabled
+                      title="El estado se activa automáticamente cuando ARCA producción queda verificado."
+                    />
+                    Facturación electrónica: {arcaActivo ? "conectada" : "desconectada"}
+                  </label>
+
+                  <>
+                      <div style={{ fontSize: 13, color: "#475569" }}>
+                        Datos fiscales del comercio. El punto de venta debe ser el habilitado en ARCA para Web Services.
+                      </div>
+                      <div
+                        className="app-form-grid-small"
+                        style={styles.formGridSmall}
+                      >
+                        <Input
+                          placeholder="CUIT del comercio (11 números)"
+                          value={arcaCuit}
+                          onChange={(valor) =>
+                            setArcaCuit(valor.replace(/\D/g, "").slice(0, 11))
+                          }
+                        />
+                        <Input
+                          placeholder="Punto de venta Web Services"
+                          value={arcaPuntoVenta}
+                          onChange={(valor) => setArcaPuntoVenta(valor.replace(/\D/g, "").slice(0, 5))}
+                        />
+                      </div>
+
+                      <div
+                        style={{
+                          padding: 14,
+                          borderRadius: 12,
+                          border: "1px solid #e2e8f0",
+                          background: "#ffffff",
+                          display: "grid",
+                          gap: 12,
+                        }}
+                      >
+                        <div>
+                          <strong style={{ display: "block", color: "#0f172a" }}>
+                            Datos fiscales para el comprobante
+                          </strong>
+                          <p style={{ margin: "5px 0 0", color: "#64748b", fontSize: 13 }}>
+                            Estos datos se usarán para mostrar e imprimir las facturas del comercio.
+                          </p>
+                        </div>
+
+                        <div className="app-form-grid-small" style={styles.formGridSmall}>
+                          <Input
+                            placeholder="Razón social / nombre fiscal"
+                            value={arcaRazonSocial}
+                            onChange={setArcaRazonSocial}
+                          />
+
+                          <select
+                            style={styles.input}
+                            value={arcaCondicionIva}
+                            onChange={(e) => setArcaCondicionIva(e.target.value)}
+                          >
+                            <option value="">Condición frente al IVA</option>
+                            <option value="monotributo">Monotributo</option>
+                            <option value="responsable_inscripto">Responsable inscripto</option>
+                            <option value="exento">IVA exento</option>
+                          </select>
+
+                          <Input
+                            placeholder="Ingresos Brutos (opcional)"
+                            value={arcaIngresosBrutos}
+                            onChange={setArcaIngresosBrutos}
+                          />
+
+                          <input
+                            type="date"
+                            style={styles.input}
+                            value={arcaInicioActividades}
+                            onChange={(e) => setArcaInicioActividades(e.target.value)}
+                            aria-label="Inicio de actividades"
+                          />
+
+                          <Input
+                            placeholder="Domicilio fiscal"
+                            value={arcaDomicilioFiscal}
+                            onChange={setArcaDomicilioFiscal}
+                          />
+                        </div>
+                      </div>
+                  </>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <span style={{ color: arcaActivo ? "#166534" : "#64748b", fontSize: 14 }}>
+                      Estado: {arcaActivo ? "ARCA producción conectado" : "ARCA desconectado"}.
+                    </span>
+
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <Button onClick={guardarConfiguracionArca}>
+                        {guardandoArca ? "Guardando..." : "Guardar datos fiscales"}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {arcaActivo && !arcaAutorizacionConfirmada && (
+                    <div
+                      style={{
+                        padding: 14,
+                        borderRadius: 12,
+                        border: "1px solid #fde68a",
+                        background: "#fffbeb",
+                        color: "#92400e",
+                        fontSize: 14,
+                      }}
+                    >
+                      <strong style={{ display: "block", marginBottom: 5 }}>
+                        Falta autorización del comercio
+                      </strong>
+                      El comercio debe autorizar el Web Service para que este sistema pueda
+                      operar en su nombre. Hasta entonces no se habilitará la emisión de
+                      comprobantes.
+                    </div>
+                  )}
+
+                  {arcaActivo && arcaAutorizacionConfirmada && (
+                    <div
+                      style={{
+                        padding: 14,
+                        borderRadius: 12,
+                        border: "1px solid #e2e8f0",
+                        background: "#f8fafc",
+                        color: "#475569",
+                        fontSize: 14,
+                      }}
+                    >
+                      La conexión de producción está verificada y el comercio puede solicitar CAE real desde Ventas.
+                      {arcaAutorizacionConfirmadaAt
+                        ? ` Registro anterior: ${new Date(arcaAutorizacionConfirmadaAt).toLocaleString("es-AR")}.`
+                        : ""}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </Panel>
         </>
       )}
@@ -3690,6 +4801,8 @@ function Productos({
     categoria: "",
     precio: "",
     costo: "",
+    tratamientoIva: "gravado" as "gravado" | "exento" | "no_gravado",
+    alicuotaIva: "21",
     stock: "",
     minimo: "",
   });
@@ -3703,6 +4816,8 @@ function Productos({
       categoria: "",
       precio: "",
       costo: "",
+      tratamientoIva: "gravado",
+      alicuotaIva: "21",
       stock: "",
       minimo: "",
     });
@@ -3723,6 +4838,8 @@ function Productos({
       categoria: producto.categoria,
       precio: String(producto.precio),
       costo: String(producto.costo),
+      tratamientoIva: producto.tratamientoIva,
+      alicuotaIva: producto.tratamientoIva === "gravado" ? String(producto.alicuotaIva) : "21",
       stock: String(producto.stock),
       minimo: String(producto.minimo),
     });
@@ -3734,6 +4851,7 @@ function Productos({
       form.categoria &&
       form.precio !== "" &&
       form.costo !== "" &&
+      (form.tratamientoIva !== "gravado" || form.alicuotaIva !== "") &&
       form.stock !== "" &&
       form.minimo !== ""
     );
@@ -3794,6 +4912,9 @@ function Productos({
         categoria: form.categoria,
         precio: Number(form.precio),
         costo: Number(form.costo),
+        tratamiento_iva: form.tratamientoIva,
+        alicuota_iva:
+          form.tratamientoIva === "gravado" ? Number(form.alicuotaIva) : 0,
         stock: Number(form.stock),
         minimo: Number(form.minimo),
         activo: true,
@@ -3847,6 +4968,9 @@ function Productos({
         categoria: form.categoria,
         precio: Number(form.precio),
         costo: Number(form.costo),
+        tratamiento_iva: form.tratamientoIva,
+        alicuota_iva:
+          form.tratamientoIva === "gravado" ? Number(form.alicuotaIva) : 0,
         stock: Number(form.stock),
         minimo: Number(form.minimo),
       })
@@ -4467,7 +5591,7 @@ function Productos({
         const { data, error } = await supabase
           .from("productos")
           .select(
-            "id,nombre,codigo,codigo_interno,codigo_barras,codigo_proveedor,categoria,precio,costo,stock,minimo,activo",
+            "id,nombre,codigo,codigo_interno,codigo_barras,codigo_proveedor,categoria,precio,costo,tratamiento_iva,alicuota_iva,stock,minimo,activo",
           )
           .eq("comercio_id", comercioActual.id)
           .order("nombre", { ascending: true })
@@ -4503,6 +5627,16 @@ function Productos({
         Categoria: producto.categoria || "",
         Precio: Number(producto.precio || 0),
         Costo: Number(producto.costo || 0),
+        "Tratamiento IVA":
+          producto.tratamiento_iva === "exento"
+            ? "Exento"
+            : producto.tratamiento_iva === "no_gravado"
+              ? "No gravado"
+              : "Gravado",
+        IVA:
+          producto.tratamiento_iva === "gravado" || !producto.tratamiento_iva
+            ? Number(producto.alicuota_iva ?? 21)
+            : "",
         Stock: Number(producto.stock || 0),
         Minimo: Number(producto.minimo || 0),
         Activo: producto.activo ? "Sí" : "No",
@@ -4876,6 +6010,8 @@ function Productos({
                     categoria: "",
                     precio: "",
                     costo: "",
+                    tratamientoIva: "gravado",
+                    alicuotaIva: "21",
                     stock: "",
                     minimo: "",
                   });
@@ -5614,6 +6750,39 @@ function Productos({
               onChange={(v) => setForm({ ...form, costo: v })}
             />
 
+            <select
+              style={styles.input}
+              value={
+                form.tratamientoIva === "gravado"
+                  ? `gravado:${form.alicuotaIva}`
+                  : form.tratamientoIva
+              }
+              onChange={(e) => {
+                const valor = e.target.value;
+
+                if (valor.startsWith("gravado:")) {
+                  setForm({
+                    ...form,
+                    tratamientoIva: "gravado",
+                    alicuotaIva: valor.split(":")[1] || "21",
+                  });
+                  return;
+                }
+
+                setForm({
+                  ...form,
+                  tratamientoIva: valor as "exento" | "no_gravado",
+                  alicuotaIva: "21",
+                });
+              }}
+            >
+              <option value="gravado:21">IVA 21% (general)</option>
+              <option value="gravado:10.5">IVA 10,5%</option>
+              <option value="gravado:27">IVA 27%</option>
+              <option value="exento">Exento</option>
+              <option value="no_gravado">No gravado</option>
+            </select>
+
             <Input
               placeholder="Stock"
               type="number"
@@ -5688,6 +6857,7 @@ function Productos({
             <Th>Categoría</Th>
             <Th>Precio</Th>
             <Th>Costo</Th>
+            <Th>IVA / Tratamiento</Th>
             <Th>Stock</Th>
             <Th>Estado</Th>
             <Th>Acciones</Th>
@@ -5713,6 +6883,13 @@ function Productos({
                 <Td>{producto.categoria}</Td>
                 <Td>{money(producto.precio)}</Td>
                 <Td>{money(producto.costo)}</Td>
+                <Td>
+                  {producto.tratamientoIva === "exento"
+                    ? "Exento"
+                    : producto.tratamientoIva === "no_gravado"
+                      ? "No gravado"
+                      : `IVA ${String(producto.alicuotaIva).replace(".", ",")}%`}
+                </Td>
                 <Td>{producto.stock}</Td>
                 <Td>
                   {!producto.activo ? (
@@ -8690,6 +9867,11 @@ function Clientes({
 }) {
   const [nombre, setNombre] = useState("");
   const [telefono, setTelefono] = useState("");
+  const [tipoDocumento, setTipoDocumento] = useState("");
+  const [numeroDocumento, setNumeroDocumento] = useState("");
+  const [condicionIva, setCondicionIva] = useState("");
+  const [domicilio, setDomicilio] = useState("");
+  const [emailCliente, setEmailCliente] = useState("");
   const [clienteEditando, setClienteEditando] = useState<Cliente | null>(null);
   const [clienteHistorialId, setClienteHistorialId] = useState<number | null>(
     null,
@@ -8724,6 +9906,11 @@ function Clientes({
   function limpiarFormulario() {
     setNombre("");
     setTelefono("");
+    setTipoDocumento("");
+    setNumeroDocumento("");
+    setCondicionIva("");
+    setDomicilio("");
+    setEmailCliente("");
     setClienteEditando(null);
   }
 
@@ -8731,6 +9918,15 @@ function Clientes({
     setClienteEditando(cliente);
     setNombre(cliente.nombre);
     setTelefono(cliente.telefono || "");
+    setTipoDocumento(
+      cliente.tipoDocumento === null ? "" : String(cliente.tipoDocumento),
+    );
+    setNumeroDocumento(cliente.numeroDocumento || "");
+    setCondicionIva(
+      cliente.condicionIva === null ? "" : String(cliente.condicionIva),
+    );
+    setDomicilio(cliente.domicilio || "");
+    setEmailCliente(cliente.email || "");
   }
 
   function normalizarTelefonoWhatsApp(telefonoCliente: string) {
@@ -8807,8 +10003,13 @@ function Clientes({
       .from("clientes")
       .insert({
         comercio_id: comercioActual.id,
-        nombre,
-        telefono,
+        nombre: nombre.trim(),
+        telefono: telefono.trim(),
+        tipo_documento: tipoDocumento ? Number(tipoDocumento) : null,
+        numero_documento: numeroDocumento.replace(/\D/g, "") || null,
+        condicion_iva: condicionIva ? Number(condicionIva) : null,
+        domicilio: domicilio.trim() || null,
+        email: emailCliente.trim() || null,
       })
       .select()
       .single();
@@ -8825,6 +10026,17 @@ function Clientes({
         comercioId: data.comercio_id,
         nombre: data.nombre,
         telefono: data.telefono || "",
+        tipoDocumento:
+          data.tipo_documento === null || data.tipo_documento === undefined
+            ? null
+            : Number(data.tipo_documento),
+        numeroDocumento: data.numero_documento || "",
+        condicionIva:
+          data.condicion_iva === null || data.condicion_iva === undefined
+            ? null
+            : Number(data.condicion_iva),
+        domicilio: data.domicilio || "",
+        email: data.email || "",
       },
     ]);
 
@@ -8844,7 +10056,15 @@ function Clientes({
 
     const { data, error } = await supabase
       .from("clientes")
-      .update({ nombre, telefono })
+      .update({
+        nombre: nombre.trim(),
+        telefono: telefono.trim(),
+        tipo_documento: tipoDocumento ? Number(tipoDocumento) : null,
+        numero_documento: numeroDocumento.replace(/\D/g, "") || null,
+        condicion_iva: condicionIva ? Number(condicionIva) : null,
+        domicilio: domicilio.trim() || null,
+        email: emailCliente.trim() || null,
+      })
       .eq("id", clienteEditando.id)
       .eq("comercio_id", comercioActual.id)
       .select()
@@ -8860,6 +10080,17 @@ function Clientes({
       comercioId: data.comercio_id,
       nombre: data.nombre,
       telefono: data.telefono || "",
+      tipoDocumento:
+        data.tipo_documento === null || data.tipo_documento === undefined
+          ? null
+          : Number(data.tipo_documento),
+      numeroDocumento: data.numero_documento || "",
+      condicionIva:
+        data.condicion_iva === null || data.condicion_iva === undefined
+          ? null
+          : Number(data.condicion_iva),
+      domicilio: data.domicilio || "",
+      email: data.email || "",
     };
 
     setClientes(
@@ -8879,12 +10110,61 @@ function Clientes({
 
       <Panel title={clienteEditando ? "Editar cliente" : "Nuevo cliente"}>
         <div className="app-form-grid-small" style={styles.formGridSmall}>
-          <Input placeholder="Nombre" value={nombre} onChange={setNombre} />
+          <Input placeholder="Nombre / Razón social" value={nombre} onChange={setNombre} />
           <Input
             placeholder="Teléfono"
             value={telefono}
             onChange={setTelefono}
           />
+
+          <select
+            style={styles.input}
+            value={tipoDocumento}
+            onChange={(e) => setTipoDocumento(e.target.value)}
+          >
+            <option value="">Tipo de documento (opcional)</option>
+            <option value="80">CUIT</option>
+            <option value="86">CUIL</option>
+            <option value="96">DNI</option>
+          </select>
+
+          <Input
+            placeholder="Número de documento / CUIT"
+            value={numeroDocumento}
+            onChange={setNumeroDocumento}
+          />
+
+          <select
+            style={styles.input}
+            value={condicionIva}
+            onChange={(e) => setCondicionIva(e.target.value)}
+          >
+            <option value="">Condición frente al IVA (opcional)</option>
+            <option value="1">IVA Responsable Inscripto</option>
+            <option value="4">IVA Sujeto Exento</option>
+            <option value="5">Consumidor Final</option>
+            <option value="6">Responsable Monotributo</option>
+            <option value="7">Sujeto no categorizado</option>
+            <option value="8">Proveedor del Exterior</option>
+            <option value="9">Cliente del Exterior</option>
+            <option value="10">IVA Liberado - Ley 19.640</option>
+            <option value="13">Monotributista Social</option>
+            <option value="15">IVA No Alcanzado</option>
+            <option value="16">Monotributo Trabajador Independiente Promovido</option>
+          </select>
+
+          <Input
+            placeholder="Domicilio"
+            value={domicilio}
+            onChange={setDomicilio}
+          />
+
+          <Input
+            placeholder="Email"
+            value={emailCliente}
+            onChange={setEmailCliente}
+          />
+
           {clienteEditando ? (
             <Button onClick={guardarCambiosCliente}>Guardar cambios</Button>
           ) : (
@@ -8916,6 +10196,10 @@ function Clientes({
                     <h4 style={styles.clientName}>{cliente.nombre}</h4>
                     <p style={styles.clientMeta}>
                       {cliente.telefono || "Sin teléfono"}
+                      {cliente.numeroDocumento
+                        ? ` · Doc: ${cliente.numeroDocumento}`
+                        : ""}
+                      {cliente.email ? ` · ${cliente.email}` : ""}
                     </p>
                   </div>
                   <div style={styles.clientActions}>
@@ -10771,6 +12055,12 @@ function Ventas({
   const [vinculandoCodigo, setVinculandoCodigo] = useState(false);
   const [guardandoProductoRapido, setGuardandoProductoRapido] = useState(false);
   const [registrandoVenta, setRegistrandoVenta] = useState(false);
+  const [facturandoVentaId, setFacturandoVentaId] = useState<number | null>(null);
+  const [consultandoComprobanteId, setConsultandoComprobanteId] = useState<number | null>(null);
+  const [comprobanteVisible, setComprobanteVisible] = useState<{
+    venta: Venta;
+    comprobante: ComprobanteArca;
+  } | null>(null);
   const procesandoVentaRef = useRef(false);
   const [nuevoProductoRapido, setNuevoProductoRapido] = useState({
     nombre: "",
@@ -11041,6 +12331,238 @@ function Ventas({
   const ventasAnuladasFiltradas = ventasFiltradas.filter(
     (venta) => venta.estado === "anulada",
   ).length;
+
+  async function verComprobanteFiscal(venta: Venta) {
+    if (!comercioActual || consultandoComprobanteId !== null) return;
+
+    setConsultandoComprobanteId(venta.id);
+    try {
+      const { data, error } = await supabase
+        .from("arca_comprobantes")
+        .select("*")
+        .eq("comercio_id", comercioActual.id)
+        .eq("venta_id", venta.id)
+        .eq("ambiente", "produccion")
+        .eq("resultado", "autorizado")
+        .order("id", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!data) {
+        alert("Esta venta todavía no tiene una factura fiscal autorizada.");
+        return;
+      }
+
+      if (
+        data.ambiente !== "produccion" ||
+        data.resultado !== "autorizado" ||
+        !data.cae
+      ) {
+        throw new Error("El comprobante no figura autorizado en producción.");
+      }
+
+      const comprobante = data as ComprobanteArca;
+      comprobante.qr_url = construirQrFiscalFrontend(comprobante);
+
+      setComprobanteVisible({ venta, comprobante });
+    } catch (error: any) {
+      alert(
+        "No se pudo consultar la factura: " +
+          (error?.message || String(error)),
+      );
+    } finally {
+      setConsultandoComprobanteId(null);
+    }
+  }
+
+  const formatoImporteComprobante = (valor: number) =>
+    new Intl.NumberFormat("es-AR", {
+      style: "currency",
+      currency: "ARS",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(Number(valor) || 0);
+
+  const fechaSoloComprobante = (valor: string | null) => {
+    if (!valor) return "No informado al emitir";
+    const partes = valor.slice(0, 10).split("-");
+    return partes.length === 3
+      ? `${partes[2]}/${partes[1]}/${partes[0]}`
+      : valor;
+  };
+
+  const nombreCondicionFiscal = (valor: string | null) => {
+    const opciones: Record<string, string> = {
+      monotributo: "Responsable Monotributo",
+      responsable_inscripto: "IVA Responsable Inscripto",
+      exento: "IVA Exento",
+    };
+    return opciones[valor || ""] || valor || "No informada al emitir";
+  };
+
+  function imprimirSoloComprobante() {
+    const comprobante = document.getElementById("arca-recibo-fiscal");
+
+    if (!comprobante) {
+      alert("No se encontró el comprobante para imprimir.");
+      return;
+    }
+
+    // Ventana independiente: evita que el navegador imprima también
+    // las páginas invisibles del sistema y el modal que contiene la factura.
+    const ventana = window.open("", "_blank", "width=900,height=1100");
+
+    if (!ventana) {
+      alert("El navegador bloqueó la ventana de impresión. Permití las ventanas emergentes para este sitio y volvé a intentarlo.");
+      return;
+    }
+
+    const documento = ventana.document;
+    documento.title = "Factura electrónica ARCA";
+
+    const estilos = documento.createElement("style");
+    estilos.textContent = `
+      @page { size: A4; margin: 12mm; }
+      *, *::before, *::after { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body { font: 11px Arial, sans-serif; color: #111827; background: #fff; }
+      #arca-recibo-fiscal {
+        position: static !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 12px !important;
+        border: 1px solid #111827 !important;
+        box-shadow: none !important;
+        font-size: 11px !important;
+        overflow: visible !important;
+      }
+      #arca-recibo-fiscal table { width: 100%; border-collapse: collapse; }
+      #arca-recibo-fiscal tr { break-inside: avoid; page-break-inside: avoid; }
+      #arca-recibo-fiscal > div:first-child { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      @media print {
+        html, body { height: auto !important; overflow: visible !important; }
+      }
+    `;
+    documento.head.appendChild(estilos);
+    documento.body.appendChild(comprobante.cloneNode(true));
+
+    ventana.focus();
+    // Dar tiempo a la nueva ventana a componer su único contenido.
+    ventana.setTimeout(() => ventana.print(), 300);
+  }
+
+  async function facturarVentaReal(venta: Venta) {
+    if (!comercioActual) {
+      alert("No hay comercio asociado.");
+      return;
+    }
+
+    if (venta.estado === "anulada") {
+      alert("No se puede facturar una venta anulada.");
+      return;
+    }
+
+    if (facturandoVentaId !== null) return;
+
+    const confirmar = window.confirm(
+      `Se solicitará a ARCA un CAE REAL para la venta #${venta.id} por ${money(venta.total)}. ¿Continuar?`,
+    );
+    if (!confirmar) return;
+
+    setFacturandoVentaId(venta.id);
+
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "arca-facturar",
+        {
+          body: {
+            accion: "emitir",
+            comercio_id: comercioActual.id,
+            venta_id: venta.id,
+          },
+        },
+      );
+
+      if (error) {
+        let detalle = error.message || "No se pudo llamar a ARCA.";
+
+        try {
+          const respuestaError = (error as any)?.context;
+          if (respuestaError && typeof respuestaError.clone === "function") {
+            const cuerpo = await respuestaError.clone().json();
+            const extras = Array.isArray(cuerpo?.errores)
+              ? cuerpo.errores
+                  .map((item: any) => `${item.codigo}: ${item.mensaje}`)
+                  .join("\n")
+              : "";
+            const observaciones = Array.isArray(cuerpo?.observaciones)
+              ? cuerpo.observaciones
+                  .map((item: any) => `${item.codigo}: ${item.mensaje}`)
+                  .join("\n")
+              : "";
+
+            detalle = [cuerpo?.error || detalle, extras, observaciones]
+              .filter(Boolean)
+              .join("\n");
+          }
+        } catch {
+          // Si no hay cuerpo JSON, mostramos el mensaje original.
+        }
+
+        alert("No se pudo emitir la factura:\n" + detalle);
+        return;
+      }
+
+      if (!data?.ok) {
+        const extras = Array.isArray(data?.errores)
+          ? data.errores
+              .map((item: any) => `${item.codigo}: ${item.mensaje}`)
+              .join("\n")
+          : "";
+        const observaciones = Array.isArray(data?.observaciones)
+          ? data.observaciones
+              .map((item: any) => `${item.codigo}: ${item.mensaje}`)
+              .join("\n")
+          : "";
+
+        alert(
+          "ARCA no autorizó la factura:\n" +
+            [data?.error || "Error desconocido.", extras, observaciones]
+              .filter(Boolean)
+              .join("\n"),
+        );
+        return;
+      }
+
+      const comprobante = data?.comprobante as ComprobanteArca | undefined;
+      if (!comprobante) {
+        alert(data?.mensaje || "ARCA respondió correctamente, pero no se recibió el comprobante.");
+        return;
+      }
+
+      comprobante.qr_url = comprobante.qr_url || construirQrFiscalFrontend(comprobante);
+      setComprobanteVisible({ venta, comprobante });
+
+      const puntoVenta = String(comprobante.punto_venta || 0).padStart(5, "0");
+      const numero = String(comprobante.numero_comprobante || 0).padStart(8, "0");
+      const tipo = comprobante.tipoNombre || `Comprobante ${comprobante.tipo_comprobante}`;
+
+      alert(
+        `${data?.yaExistia ? "Esta venta ya tenía" : data?.recuperado ? "Se recuperó" : "ARCA autorizó"} la factura fiscal.\n\n` +
+          `${tipo} ${puntoVenta}-${numero}\n` +
+          `CAE: ${comprobante.cae}`,
+      );
+    } catch (error: any) {
+      alert(
+        "No se pudo emitir la factura: " +
+          (error?.message || error),
+      );
+    } finally {
+      setFacturandoVentaId(null);
+    }
+  }
 
   function limpiarFiltrosVentas() {
     setFiltroPeriodoVentas("todas");
@@ -12303,6 +13825,20 @@ function Ventas({
               />
             </div>
 
+            <div
+              style={{
+                marginBottom: 14,
+                padding: "10px 12px",
+                borderRadius: 12,
+                background: "#eff6ff",
+                border: "1px solid #bfdbfe",
+                color: "#1e40af",
+                fontSize: 13,
+              }}
+            >
+              Facturación electrónica ARCA: al tocar <strong>Facturar</strong>, el sistema solicita un CAE de producción. Si ARCA no autoriza el comprobante, no se genera una factura fiscal.
+            </div>
+
             {ventasAnuladasFiltradas > 0 && (
               <p style={{ ...styles.text, marginTop: 0 }}>
                 El resultado incluye {ventasAnuladasFiltradas}{" "}
@@ -12372,14 +13908,37 @@ function Ventas({
                       </div>
                     )}
 
-                    {puedeAnularEstaVenta && (
+                    {!anulada && (
                       <div className="app-actions" style={styles.actions}>
                         <button
-                          style={styles.smallButtonDanger}
-                          onClick={() => iniciarAnulacion(venta)}
+                          style={styles.smallButton}
+                          onClick={() => facturarVentaReal(venta)}
+                          disabled={facturandoVentaId !== null}
                         >
-                          Anular venta
+                          {facturandoVentaId === venta.id
+                            ? "Solicitando CAE..."
+                            : "Facturar"}
                         </button>
+
+                        <button
+                          style={styles.smallButton}
+                          onClick={() => verComprobanteFiscal(venta)}
+                          disabled={consultandoComprobanteId !== null}
+                        >
+                          {consultandoComprobanteId === venta.id
+                            ? "Buscando comprobante..."
+                            : "Ver factura"}
+                        </button>
+
+                        {puedeAnularEstaVenta && (
+                          <button
+                            style={styles.smallButtonDanger}
+                            onClick={() => iniciarAnulacion(venta)}
+                            disabled={facturandoVentaId !== null}
+                          >
+                            Anular venta
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -12389,6 +13948,151 @@ function Ventas({
           </>
         )}
       </Panel>
+
+      {comprobanteVisible && (
+        <div
+          className="app-modal-backdrop arca-vista-backdrop"
+          style={{ ...styles.modalBackdrop, overflowY: "auto", alignItems: "flex-start" }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Factura electrónica ARCA"
+        >
+          <div
+            className="arca-vista-modal"
+            style={{
+              ...styles.modalBox,
+              width: "min(780px, 100%)",
+              maxHeight: "calc(100vh - 40px)",
+              overflowY: "auto",
+              margin: "auto",
+            }}
+          >
+            <div className="arca-ocultar-impresion" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+              <strong>Vista del comprobante guardado</strong>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  style={styles.smallButton}
+                  onClick={imprimirSoloComprobante}
+                >
+                  Imprimir / Guardar PDF
+                </button>
+                <button
+                  type="button"
+                  style={styles.smallButton}
+                  onClick={() => setComprobanteVisible(null)}
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+
+            <article
+              id="arca-recibo-fiscal"
+              style={{ border: "2px solid #111827", padding: 22, color: "#111827", background: "#fff", position: "relative" }}
+            >
+              <div style={{ textAlign: "center", marginBottom: 16, fontWeight: 900, fontSize: 16, letterSpacing: 0.4 }}>
+                FACTURA ELECTRÓNICA · ARCA
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 14, alignItems: "start", borderBottom: "1px solid #cbd5e1", paddingBottom: 16 }}>
+                <div>
+                  <h2 style={{ fontSize: 19, margin: "0 0 8px" }}>
+                    {comprobanteVisible.comprobante.emisor_razon_social || "Razón social no informada al emitir"}
+                  </h2>
+                  <div><strong>CUIT:</strong> {comprobanteVisible.comprobante.emisor_cuit || "No informado"}</div>
+                  <div><strong>IVA:</strong> {nombreCondicionFiscal(comprobanteVisible.comprobante.emisor_condicion_iva)}</div>
+                  <div><strong>Domicilio fiscal:</strong> {comprobanteVisible.comprobante.emisor_domicilio_fiscal || "No informado al emitir"}</div>
+                  <div><strong>Ingresos Brutos:</strong> {comprobanteVisible.comprobante.emisor_ingresos_brutos || "No informado al emitir"}</div>
+                  <div><strong>Inicio de actividades:</strong> {fechaSoloComprobante(comprobanteVisible.comprobante.emisor_inicio_actividades)}</div>
+                </div>
+                <div style={{ border: "2px solid #111827", textAlign: "center", padding: "8px 15px", fontSize: 28, fontWeight: 900 }}>
+                  {comprobanteVisible.comprobante.tipo_comprobante === 11 ? "C" : comprobanteVisible.comprobante.tipo_comprobante === 6 ? "B" : comprobanteVisible.comprobante.tipo_comprobante === 1 ? "A" : "—"}
+                  <div style={{ fontSize: 11, fontWeight: 400 }}>Cod. {String(comprobanteVisible.comprobante.tipo_comprobante).padStart(3, "0")}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <h2 style={{ fontSize: 19, margin: "0 0 8px" }}>
+                    {comprobanteVisible.comprobante.tipo_comprobante === 11 ? "FACTURA C" : comprobanteVisible.comprobante.tipo_comprobante === 6 ? "FACTURA B" : comprobanteVisible.comprobante.tipo_comprobante === 1 ? "FACTURA A" : "COMPROBANTE"}
+                  </h2>
+                  <div><strong>Número:</strong> {String(comprobanteVisible.comprobante.punto_venta).padStart(5, "0")}-{String(comprobanteVisible.comprobante.numero_comprobante).padStart(8, "0")}</div>
+                  <div><strong>Fecha:</strong> {fechaSoloComprobante(comprobanteVisible.comprobante.fecha_emision)}</div>
+                  <div><strong>Venta interna:</strong> #{comprobanteVisible.venta.id}</div>
+                </div>
+              </div>
+
+              <div style={{ padding: "16px 0", borderBottom: "1px solid #cbd5e1" }}>
+                <div><strong>Receptor:</strong> {comprobanteVisible.comprobante.receptor_nombre || "Consumidor Final"}</div>
+                <div><strong>Condición IVA del receptor:</strong> {({ 1: "Responsable inscripto", 4: "Exento", 5: "Consumidor final", 6: "Monotributo", 13: "Monotributista social", 15: "No alcanzado", 16: "Monotributo trabajador independiente promovido" } as Record<number, string>)[Number(comprobanteVisible.comprobante.receptor_condicion_iva)] || "No informada"}</div>
+                <div><strong>Documento:</strong> {comprobanteVisible.comprobante.receptor_tipo_doc === 99 ? "Consumidor final sin documento identificado" : `${comprobanteVisible.comprobante.receptor_tipo_doc || "Tipo no informado"}: ${comprobanteVisible.comprobante.receptor_nro_doc || "No informado"}`}</div>
+              </div>
+
+              <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 18, fontSize: 12 }}>
+                <thead>
+                  <tr style={{ borderBottom: "2px solid #111827", textAlign: "left" }}>
+                    <th style={{ padding: 7 }}>Descripción</th>
+                    <th style={{ padding: 7, textAlign: "right" }}>Cant.</th>
+                    <th style={{ padding: 7, textAlign: "right" }}>Precio unit.</th>
+                    <th style={{ padding: 7, textAlign: "right" }}>Subtotal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comprobanteVisible.venta.items.map((item, indice) => (
+                    <tr key={`${item.productoId}-${indice}`} style={{ borderBottom: "1px solid #e2e8f0" }}>
+                      <td style={{ padding: 7 }}>{item.nombre}</td>
+                      <td style={{ padding: 7, textAlign: "right" }}>{item.cantidad}</td>
+                      <td style={{ padding: 7, textAlign: "right" }}>{formatoImporteComprobante(item.precioUnitario)}</td>
+                      <td style={{ padding: 7, textAlign: "right" }}>{formatoImporteComprobante(item.subtotal)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div style={{ textAlign: "right", borderTop: "2px solid #111827", paddingTop: 12, marginTop: 24, display: "grid", gap: 4 }}>
+                {comprobanteVisible.comprobante.tipo_comprobante === 1 && (
+                  <>
+                    <div>Neto gravado: {formatoImporteComprobante(comprobanteVisible.comprobante.importe_neto)}</div>
+                    {Number(comprobanteVisible.comprobante.importe_exento || 0) > 0 && (
+                      <div>Exento: {formatoImporteComprobante(comprobanteVisible.comprobante.importe_exento)}</div>
+                    )}
+                    {Number(comprobanteVisible.comprobante.importe_no_gravado || 0) > 0 && (
+                      <div>No gravado: {formatoImporteComprobante(comprobanteVisible.comprobante.importe_no_gravado)}</div>
+                    )}
+                    <div>IVA: {formatoImporteComprobante(comprobanteVisible.comprobante.importe_iva)}</div>
+                    {Number(comprobanteVisible.comprobante.importe_tributos || 0) > 0 && (
+                      <div>Tributos: {formatoImporteComprobante(comprobanteVisible.comprobante.importe_tributos || 0)}</div>
+                    )}
+                  </>
+                )}
+                <strong style={{ fontSize: 20 }}>TOTAL: {formatoImporteComprobante(comprobanteVisible.comprobante.importe_total)}</strong>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 28, borderTop: "1px solid #cbd5e1", paddingTop: 14 }}>
+                <div>
+                  <strong>CAE</strong>
+                  <div style={{ fontSize: 16, fontWeight: 800, overflowWrap: "anywhere" }}>{comprobanteVisible.comprobante.cae}</div>
+                  <div><strong>Vencimiento CAE:</strong> {fechaSoloComprobante(comprobanteVisible.comprobante.cae_vencimiento)}</div>
+                  <div style={{ marginTop: 12, fontWeight: 800 }}>ARCA · Comprobante Autorizado</div>
+                </div>
+                <div style={{ display: "grid", justifyItems: "center" }}>
+                  <QrFiscal url={comprobanteVisible.comprobante.qr_url || construirQrFiscalFrontend(comprobanteVisible.comprobante)} />
+                </div>
+              </div>
+              {comprobanteVisible.comprobante.tipo_comprobante === 1 &&
+                comprobanteVisible.comprobante.emisor_condicion_iva === "responsable_inscripto" &&
+                [6, 13, 16].includes(Number(comprobanteVisible.comprobante.receptor_condicion_iva)) && (
+                  <p style={{ fontSize: 11, marginTop: 15, fontWeight: 700 }}>
+                    El crédito fiscal discriminado en el presente comprobante, sólo podrá ser computado a efectos del Régimen de Sostenimiento e Inclusión Fiscal para Pequeños Contribuyentes de la Ley Nº 27.618.
+                  </p>
+                )}
+              {comprobanteVisible.comprobante.leyenda_fiscal && (
+                <p style={{ fontSize: 11, marginTop: 15 }}>{comprobanteVisible.comprobante.leyenda_fiscal}</p>
+              )}
+            </article>
+            <p className="arca-ocultar-impresion" style={{ color: "#64748b", fontSize: 12, marginTop: 12 }}>
+              Para generar PDF, tocá «Imprimir / Guardar PDF» y elegí «Guardar como PDF» en el navegador.
+              La factura muestra los datos fiscales guardados al momento de la emisión y el QR correspondiente al CAE autorizado.
+            </p>
+          </div>
+        </div>
+      )}
 
       {codigoPendienteVinculacion && (
         <div className="app-modal-backdrop" style={styles.modalBackdrop}>

@@ -2506,11 +2506,16 @@ function MiComercio({
         const bytes = new Uint8Array(buffer);
 
         let binario = "";
-        for (let i = 0; i < bytes.length; i += 8192) {
-          binario += String.fromCharCode(...bytes.subarray(i, i + 8192));
-        }
 
-        contenidoCertificado = btoa(binario);
+for (let i = 0; i < bytes.length; i += 8192) {
+  const bloque = bytes.subarray(i, i + 8192);
+
+  for (let j = 0; j < bloque.length; j++) {
+    binario += String.fromCharCode(bloque[j]);
+  }
+}
+
+contenidoCertificado = btoa(binario);
       }
 
       const { data, error } = await supabase.functions.invoke("arca-certificado", {

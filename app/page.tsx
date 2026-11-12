@@ -679,6 +679,7 @@ export default function Home() {
   const [cargandoUsuario, setCargandoUsuario] = useState(true);
   const [cargandoDatos, setCargandoDatos] = useState(false);
   const [modoRegistro, setModoRegistro] = useState(false);
+  const [altaSinComercio, setAltaSinComercio] = useState(false);
   const registroEnProcesoRef = useRef(false);
   const [estadoSincronizacion, setEstadoSincronizacion] = useState<
     "conectando" | "activa" | "error"
@@ -1117,6 +1118,7 @@ export default function Home() {
   async function cargarComercioYDatos() {
     if (!usuario) return;
 
+    setAltaSinComercio(false);
     setCargandoDatos(true);
 
     const { data, error } = await supabase
@@ -1169,14 +1171,18 @@ export default function Home() {
           setAccesoTotalUsuario(false);
           setPermisosUsuario({});
           await cargarDatos(comercioCreado.id, "admin_comercio");
+          setAltaSinComercio(false);
         } catch (error: any) {
           alert(
             "No se pudo completar el alta del comercio: " +
               (error?.message || String(error)),
           );
+          setAltaSinComercio(true);
         }
       } else {
-        alert("Este usuario no tiene un comercio asociado.");
+        // Cuenta registrada anteriormente sin la relacion con un comercio:
+        // permitir completar el alta desde la sesion actual.
+        setAltaSinComercio(true);
       }
 
       setCargandoDatos(false);
@@ -1204,6 +1210,7 @@ export default function Home() {
     };
 
     setComercioActual(comercio);
+    setAltaSinComercio(false);
     setRolUsuario(data.rol || "admin_comercio");
     setEstadoRelacionUsuario(data.estado || "activo");
     setAccesoTotalUsuario(Boolean(data.acceso_total));
@@ -1793,11 +1800,56 @@ export default function Home() {
     }
   }
 
+  async function completarAltaComercio() {
+    if (!usuario || !registroNombreComercio.trim()) {
+      alert("Ingresá el nombre del comercio.");
+      return;
+    }
+
+    if (registroEnProcesoRef.current) return;
+    registroEnProcesoRef.current = true;
+    setCargandoDatos(true);
+
+    try {
+      const datosComercio = {
+        nombre: registroNombreComercio.trim(),
+        rubro: registroRubro.trim(),
+        telefono: registroTelefono.trim(),
+        direccion: registroDireccion.trim(),
+        email: String(usuario.email || "").trim().toLowerCase(),
+      };
+
+      const comercioData = await asegurarAltaComercio(usuario, datosComercio);
+      setComercioActual({
+        id: comercioData.id,
+        nombre: comercioData.nombre,
+        rubro: comercioData.rubro || "",
+        direccion: comercioData.direccion || "",
+        telefono: comercioData.telefono || "",
+        email: comercioData.email || "",
+        estado: comercioData.estado || "activo",
+      });
+      setRolUsuario("admin_comercio");
+      setEstadoRelacionUsuario("activo");
+      setAccesoTotalUsuario(false);
+      setPermisosUsuario({});
+      setAltaSinComercio(false);
+      await cargarDatos(comercioData.id, "admin_comercio");
+      alert("El comercio quedó vinculado a tu cuenta.");
+    } catch (error: any) {
+      alert("No se pudo completar el comercio: " + (error?.message || String(error)));
+    } finally {
+      registroEnProcesoRef.current = false;
+      setCargandoDatos(false);
+    }
+  }
+
   async function cerrarSesion() {
     await supabase.auth.signOut();
 
     setUsuario(null);
     setComercioActual(null);
+    setAltaSinComercio(false);
     setProductos([]);
     setIngresosStock([]);
     setClientes([]);
@@ -2134,6 +2186,65 @@ export default function Home() {
               </button>
             </>
           )}
+        </section>
+      </main>
+    );
+  }
+
+  if (altaSinComercio && !tokenInvitacion && !comercioActual) {
+    const datosGuardados = usuario?.user_metadata?.registro_comercio_pendiente;
+
+    return (
+      <main className="app-login-main" style={styles.loginMain}>
+        <ResponsiveStyles />
+        <section className="app-login-box" style={styles.loginBox}>
+          <h1 style={styles.loginTitle}>Completar alta del comercio</h1>
+          <p style={styles.loginText}>
+            Tu cuenta ya existe. Falta vincularla a un comercio. No necesitás crear otro usuario.
+          </p>
+          <input
+            style={styles.input}
+            placeholder="Nombre del comercio"
+            value={registroNombreComercio}
+            onChange={(e) => setRegistroNombreComercio(e.target.value)}
+          />
+          <input
+            style={{ ...styles.input, marginTop: 12 }}
+            placeholder="Rubro (opcional)"
+            value={registroRubro}
+            onChange={(e) => setRegistroRubro(e.target.value)}
+          />
+          <input
+            style={{ ...styles.input, marginTop: 12 }}
+            placeholder="Teléfono (opcional)"
+            value={registroTelefono}
+            onChange={(e) => setRegistroTelefono(e.target.value)}
+          />
+          <input
+            style={{ ...styles.input, marginTop: 12 }}
+            placeholder="Dirección (opcional)"
+            value={registroDireccion}
+            onChange={(e) => setRegistroDireccion(e.target.value)}
+          />
+          {datosGuardados?.nombre && !registroNombreComercio.trim() && (
+            <p style={styles.loginText}>
+              Nombre registrado al crear la cuenta: {datosGuardados.nombre}.
+              Podés escribirlo nuevamente para completar el alta.
+            </p>
+          )}
+          <button
+            style={{ ...styles.button, marginTop: 18 }}
+            onClick={completarAltaComercio}
+            disabled={cargandoDatos}
+          >
+            {cargandoDatos ? "Vinculando..." : "Completar alta"}
+          </button>
+          <button
+            style={{ ...styles.secondaryButton, marginTop: 12 }}
+            onClick={cerrarSesion}
+          >
+            Cerrar sesión
+          </button>
         </section>
       </main>
     );

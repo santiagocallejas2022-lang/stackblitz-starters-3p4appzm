@@ -679,6 +679,7 @@ export default function Home() {
   const [cargandoUsuario, setCargandoUsuario] = useState(true);
   const [cargandoDatos, setCargandoDatos] = useState(false);
   const [modoRegistro, setModoRegistro] = useState(false);
+  const registroEnProcesoRef = useRef(false);
   const [estadoSincronizacion, setEstadoSincronizacion] = useState<
     "conectando" | "activa" | "error"
   >("conectando");
@@ -745,7 +746,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!usuario || !urlRevisada) return;
+    if (!usuario || !urlRevisada || registroEnProcesoRef.current) return;
 
     if (tokenInvitacion && !invitacionProcesadaRef.current) {
       aceptarInvitacionPendiente();
@@ -1024,6 +1025,95 @@ export default function Home() {
     await cargarComercioYDatos();
   }
 
+  async function asegurarAltaComercio(
+    user: any,
+    datos: {
+      nombre: string;
+      rubro?: string;
+      telefono?: string;
+      direccion?: string;
+      email: string;
+    },
+  ) {
+    // Una cuenta puede quedar creada antes de que termine el alta del comercio.
+    // Si se interrumpio el proceso, reutilizamos el comercio propio para no duplicarlo.
+    const { data: relacionExistente, error: errorRelacionExistente } =
+      await supabase
+        .from("usuarios_comercios")
+        .select("comercio_id")
+        .eq("user_id", user.id)
+        .limit(1)
+        .maybeSingle();
+
+    if (errorRelacionExistente) throw errorRelacionExistente;
+
+    let comercioData: any = null;
+
+    if (relacionExistente?.comercio_id) {
+      const { data, error } = await supabase
+        .from("comercios")
+        .select("*")
+        .eq("id", relacionExistente.comercio_id)
+        .single();
+
+      if (error) throw error;
+      comercioData = data;
+    } else {
+      const { data: comercioPrevio, error: errorComercioPrevio } =
+        await supabase
+          .from("comercios")
+          .select("*")
+          .eq("owner_id", user.id)
+          .limit(1)
+          .maybeSingle();
+
+      if (errorComercioPrevio) throw errorComercioPrevio;
+
+      comercioData = comercioPrevio;
+
+      if (!comercioData) {
+        const { data, error } = await supabase
+          .from("comercios")
+          .insert({
+            nombre: datos.nombre.trim(),
+            rubro: datos.rubro || "",
+            telefono: datos.telefono || "",
+            direccion: datos.direccion || "",
+            email: datos.email.trim().toLowerCase(),
+            estado: "activo",
+            owner_id: user.id,
+          })
+          .select()
+          .single();
+
+        if (error) throw new Error("No se pudo crear el comercio: " + error.message);
+        comercioData = data;
+      }
+
+      const { error: errorRelacion } = await supabase
+        .from("usuarios_comercios")
+        .insert({
+          user_id: user.id,
+          comercio_id: comercioData.id,
+          rol: "admin_comercio",
+        });
+
+      if (errorRelacion) {
+        throw new Error("No se pudo vincular la cuenta al comercio: " + errorRelacion.message);
+      }
+    }
+
+    // No afecta el alta si la limpieza de metadatos falla.
+    const { error: errorLimpieza } = await supabase.auth.updateUser({
+      data: { registro_comercio_pendiente: null },
+    });
+    if (errorLimpieza) {
+      console.warn("No se pudo limpiar el registro pendiente:", errorLimpieza.message);
+    }
+
+    return comercioData;
+  }
+
   async function cargarComercioYDatos() {
     if (!usuario) return;
 
@@ -1060,7 +1150,35 @@ export default function Home() {
     }
 
     if (!data) {
-      alert("Este usuario no tiene un comercio asociado.");
+      const datosPendientes = usuario.user_metadata?.registro_comercio_pendiente;
+
+      if (datosPendientes?.nombre && datosPendientes?.email) {
+        try {
+          const comercioCreado = await asegurarAltaComercio(usuario, datosPendientes);
+          setComercioActual({
+            id: comercioCreado.id,
+            nombre: comercioCreado.nombre,
+            rubro: comercioCreado.rubro || "",
+            direccion: comercioCreado.direccion || "",
+            telefono: comercioCreado.telefono || "",
+            email: comercioCreado.email || "",
+            estado: comercioCreado.estado || "activo",
+          });
+          setRolUsuario("admin_comercio");
+          setEstadoRelacionUsuario("activo");
+          setAccesoTotalUsuario(false);
+          setPermisosUsuario({});
+          await cargarDatos(comercioCreado.id, "admin_comercio");
+        } catch (error: any) {
+          alert(
+            "No se pudo completar el alta del comercio: " +
+              (error?.message || String(error)),
+          );
+        }
+      } else {
+        alert("Este usuario no tiene un comercio asociado.");
+      }
+
       setCargandoDatos(false);
       return;
     }
@@ -1585,87 +1703,94 @@ export default function Home() {
   }
 
   async function registrarse() {
-    if (!registroEmail || !registroPassword || !registroNombreComercio) {
+    if (!registroEmail.trim() || !registroPassword || !registroNombreComercio.trim()) {
       alert("Completá email, contraseña y nombre del comercio.");
       return;
     }
 
-    const { data: authData, error: authError } = await supabase.auth.signUp({
-      email: registroEmail,
-      password: registroPassword,
-    });
+    if (registroEnProcesoRef.current) return;
+    registroEnProcesoRef.current = true;
 
-    if (authError) {
-      alert("Error al registrar usuario: " + authError.message);
-      return;
-    }
+    const datosComercio = {
+      nombre: registroNombreComercio.trim(),
+      rubro: registroRubro.trim(),
+      telefono: registroTelefono.trim(),
+      direccion: registroDireccion.trim(),
+      email: registroEmail.trim().toLowerCase(),
+    };
 
-    const user = authData.user;
-
-    if (!user) {
-      alert("No se pudo crear el usuario.");
-      return;
-    }
-
-    const { data: comercioData, error: comercioError } = await supabase
-      .from("comercios")
-      .insert({
-        nombre: registroNombreComercio,
-        rubro: registroRubro,
-        telefono: registroTelefono,
-        direccion: registroDireccion,
-        email: registroEmail,
-        estado: "activo",
-        owner_id: user.id,
-      })
-      .select()
-      .single();
-
-    if (comercioError) {
-      alert(
-        "El usuario se creó, pero falló la creación del comercio: " +
-          comercioError.message,
-      );
-      return;
-    }
-
-    const { error: relacionError } = await supabase
-      .from("usuarios_comercios")
-      .insert({
-        user_id: user.id,
-        comercio_id: comercioData.id,
-        rol: "admin_comercio",
+    try {
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: datosComercio.email,
+        password: registroPassword,
+        options: {
+          data: { registro_comercio_pendiente: datosComercio },
+        },
       });
 
-    if (relacionError) {
-      alert(
-        "El comercio se creó, pero falló la vinculación del usuario: " +
-          relacionError.message,
-      );
-      return;
+      if (authError) {
+        alert("Error al registrar usuario: " + authError.message);
+        return;
+      }
+
+      const user = authData.user;
+
+      if (!user) {
+        alert("No se pudo crear el usuario.");
+        return;
+      }
+
+      // Con confirmacion de email, Supabase crea el usuario sin sesion.
+      // Al verificar el email e ingresar, cargarComercioYDatos termina el alta.
+      if (!authData.session) {
+        setModoRegistro(false);
+        alert(
+          "La cuenta se creó. Revisá tu correo y confirmá el email. Después iniciá sesión: el comercio se creará automáticamente.",
+        );
+        return;
+      }
+
+      let comercioData: any;
+      try {
+        comercioData = await asegurarAltaComercio(user, datosComercio);
+      } catch (error: any) {
+        alert(
+          "La cuenta se creó, pero no se completó el comercio: " +
+            (error?.message || String(error)) +
+            ". Iniciá sesión nuevamente para reintentar.",
+        );
+        await supabase.auth.signOut();
+        return;
+      }
+
+      setUsuario(user);
+      setComercioActual({
+        id: comercioData.id,
+        nombre: comercioData.nombre,
+        rubro: comercioData.rubro || "",
+        direccion: comercioData.direccion || "",
+        telefono: comercioData.telefono || "",
+        email: comercioData.email || "",
+        estado: comercioData.estado || "activo",
+      });
+
+      setRegistroEmail("");
+      setRegistroPassword("");
+      setRegistroNombreComercio("");
+      setRegistroRubro("");
+      setRegistroTelefono("");
+      setRegistroDireccion("");
+      setRolUsuario("admin_comercio");
+      setEstadoRelacionUsuario("activo");
+      setAccesoTotalUsuario(false);
+      setPermisosUsuario({});
+      setModoRegistro(false);
+      await cargarDatos(comercioData.id, "admin_comercio");
+
+      alert("Cuenta y comercio creados correctamente.");
+    } finally {
+      registroEnProcesoRef.current = false;
     }
-
-    setUsuario(user);
-    setComercioActual({
-      id: comercioData.id,
-      nombre: comercioData.nombre,
-      rubro: comercioData.rubro || "",
-      direccion: comercioData.direccion || "",
-      telefono: comercioData.telefono || "",
-      email: comercioData.email || "",
-      estado: comercioData.estado || "activo",
-    });
-
-    setRegistroEmail("");
-    setRegistroPassword("");
-    setRegistroNombreComercio("");
-    setRegistroRubro("");
-    setRegistroTelefono("");
-    setRegistroDireccion("");
-    setRolUsuario("admin_comercio");
-    setModoRegistro(false);
-
-    alert("Cuenta y comercio creados correctamente.");
   }
 
   async function cerrarSesion() {

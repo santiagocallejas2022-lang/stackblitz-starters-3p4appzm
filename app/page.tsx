@@ -157,6 +157,8 @@ type Producto = {
   codigoProveedor: string;
   categoria: string;
   precio: number;
+  precioMayorista?: number | null;
+  precioPromocional?: number | null;
   costo: number;
   tratamientoIva: "gravado" | "exento" | "no_gravado";
   alicuotaIva: number;
@@ -199,7 +201,16 @@ type Cliente = {
   email: string;
 };
 
+type TipoPrecioVenta = "normal" | "mayorista" | "promocional";
+
+function precioParaVenta(producto: Producto, tipo: TipoPrecioVenta): number | null {
+  if (tipo === "mayorista") return producto.precioMayorista ?? null;
+  if (tipo === "promocional") return producto.precioPromocional ?? null;
+  return producto.precio;
+}
+
 type ItemVenta = {
+  tipoPrecio?: TipoPrecioVenta;
   productoId: number;
   nombre: string;
   cantidad: number;
@@ -580,6 +591,8 @@ function normalizarProducto(data: any): Producto {
     codigoProveedor: data.codigo_proveedor || "",
     categoria: data.categoria,
     precio: Number(data.precio),
+    precioMayorista: data.precio_mayorista == null ? null : Number(data.precio_mayorista),
+    precioPromocional: data.precio_promocional == null ? null : Number(data.precio_promocional),
     costo: Number(data.costo),
     tratamientoIva:
       data.tratamiento_iva === "exento" || data.tratamiento_iva === "no_gravado"
@@ -5041,6 +5054,8 @@ function Productos({
     codigoProveedor: "",
     categoria: "",
     precio: "",
+      precioMayorista: "",
+      precioPromocional: "",
     costo: "",
     tratamientoIva: "gravado" as "gravado" | "exento" | "no_gravado",
     alicuotaIva: "21",
@@ -5056,6 +5071,8 @@ function Productos({
       codigoProveedor: "",
       categoria: "",
       precio: "",
+      precioMayorista: "",
+      precioPromocional: "",
       costo: "",
       tratamientoIva: "gravado",
       alicuotaIva: "21",
@@ -5078,6 +5095,8 @@ function Productos({
       codigoProveedor: producto.codigoProveedor,
       categoria: producto.categoria,
       precio: String(producto.precio),
+      precioMayorista: producto.precioMayorista == null ? "" : String(producto.precioMayorista),
+      precioPromocional: producto.precioPromocional == null ? "" : String(producto.precioPromocional),
       costo: String(producto.costo),
       tratamientoIva: producto.tratamientoIva,
       alicuotaIva: producto.tratamientoIva === "gravado" ? String(producto.alicuotaIva) : "21",
@@ -5087,6 +5106,12 @@ function Productos({
   }
 
   function validarFormularioProducto() {
+    const alternativosValidos = [form.precioMayorista, form.precioPromocional].every((v) => {
+      if (!v.trim()) return true;
+      const precio = Number(v);
+      return Number.isFinite(precio) && precio > 0 && precio <= 9999999999.99 && Math.abs(precio * 100 - Math.round(precio * 100)) < 0.0001;
+    });
+    if (!alternativosValidos) return false;
     return (
       form.nombre &&
       form.categoria &&
@@ -5127,7 +5152,7 @@ function Productos({
     }
 
     if (!validarFormularioProducto()) {
-      alert("Completá todos los campos.");
+      alert("Completá los campos obligatorios. Los precios alternativos, si se ingresan, deben ser positivos y tener hasta dos decimales.");
       return;
     }
 
@@ -5152,6 +5177,8 @@ function Productos({
         codigo_proveedor: form.codigoProveedor.trim() || null,
         categoria: form.categoria,
         precio: Number(form.precio),
+        precio_mayorista: form.precioMayorista.trim() ? Number(form.precioMayorista) : null,
+        precio_promocional: form.precioPromocional.trim() ? Number(form.precioPromocional) : null,
         costo: Number(form.costo),
         tratamiento_iva: form.tratamientoIva,
         alicuota_iva:
@@ -5184,7 +5211,7 @@ function Productos({
     }
 
     if (!validarFormularioProducto()) {
-      alert("Completá todos los campos.");
+      alert("Completá los campos obligatorios. Los precios alternativos, si se ingresan, deben ser positivos y tener hasta dos decimales.");
       return;
     }
 
@@ -5208,6 +5235,8 @@ function Productos({
         codigo_proveedor: form.codigoProveedor.trim() || null,
         categoria: form.categoria,
         precio: Number(form.precio),
+        precio_mayorista: form.precioMayorista.trim() ? Number(form.precioMayorista) : null,
+        precio_promocional: form.precioPromocional.trim() ? Number(form.precioPromocional) : null,
         costo: Number(form.costo),
         tratamiento_iva: form.tratamientoIva,
         alicuota_iva:
@@ -6250,6 +6279,8 @@ function Productos({
                     codigoProveedor: "",
                     categoria: "",
                     precio: "",
+      precioMayorista: "",
+      precioPromocional: "",
                     costo: "",
                     tratamientoIva: "gravado",
                     alicuotaIva: "21",
@@ -6978,11 +7009,19 @@ function Productos({
             />
 
             <Input
-              placeholder="Precio"
+              placeholder="Precio habitual"
               type="number"
               value={form.precio}
               onChange={(v) => setForm({ ...form, precio: v })}
             />
+            <label style={{ display: "grid", gap: 4 }}>
+              Precio mayorista (opcional)
+              <input type="number" min="0.01" step="0.01" style={styles.input} value={form.precioMayorista} onChange={(e) => setForm({ ...form, precioMayorista: e.target.value })} />
+            </label>
+            <label style={{ display: "grid", gap: 4 }}>
+              Precio promoción / combo (opcional)
+              <input type="number" min="0.01" step="0.01" style={styles.input} value={form.precioPromocional} onChange={(e) => setForm({ ...form, precioPromocional: e.target.value })} />
+            </label>
 
             <Input
               placeholder="Costo"
@@ -12849,14 +12888,14 @@ function Ventas({
       return false;
     }
 
-    const itemExistente = carrito.find(
-      (item) => item.productoId === producto.id,
+    const indiceExistente = carrito.findIndex(
+      (item) => item.productoId === producto.id && (item.tipoPrecio || "normal") === "normal" && item.precioUnitario === producto.precio,
     );
 
-    if (itemExistente) {
+    if (indiceExistente >= 0) {
       setCarrito(
-        carrito.map((item) =>
-          item.productoId === producto.id
+        carrito.map((item, index) =>
+          index === indiceExistente
             ? {
                 ...item,
                 cantidad: item.cantidad + cantidadAgregar,
@@ -12874,6 +12913,7 @@ function Ventas({
           nombre: producto.nombre,
           cantidad: cantidadAgregar,
           precioUnitario: producto.precio,
+          tipoPrecio: "normal",
           subtotal: producto.precio * cantidadAgregar,
         },
       ]);
@@ -12917,6 +12957,17 @@ function Ventas({
           : item,
       ),
     );
+  }
+
+  function cambiarTipoPrecioCarrito(index: number, tipo: TipoPrecioVenta) {
+    const item = carrito[index];
+    const producto = productos.find((p) => p.id === item?.productoId);
+    if (!producto) return;
+    const precio = precioParaVenta(producto, tipo);
+    if (precio == null || !Number.isFinite(precio) || precio < 0) return;
+    setCarrito((actual) => actual.map((linea, i) => i === index ? {
+      ...linea, tipoPrecio: tipo, precioUnitario: precio, subtotal: precio * linea.cantidad,
+    } : linea));
   }
 
   function quitarItemCarrito(index: number) {
@@ -13413,6 +13464,8 @@ function Ventas({
     const itemsParaRegistrar = carrito.map((item) => ({
       producto_id: item.productoId,
       cantidad: item.cantidad,
+      tipo_precio: item.tipoPrecio || "normal",
+      precio_esperado: item.precioUnitario,
     }));
 
     procesandoVentaRef.current = true;
@@ -13817,12 +13870,23 @@ function Ventas({
           ) : (
             <>
               {carrito.map((item, index) => (
-                <div key={item.productoId} className="app-cart-item" style={styles.cartItem}>
+                <div key={`${item.productoId}-${index}`} className="app-cart-item" style={styles.cartItem}>
                   <div>
                     <strong>{item.nombre}</strong>
                     <p style={styles.cartMeta}>
                       {money(item.precioUnitario)} por unidad
                     </p>
+                    {(() => {
+                      const producto = productos.find((p) => p.id === item.productoId);
+                      if (!producto || (producto.precioMayorista == null && producto.precioPromocional == null && (!item.tipoPrecio || item.tipoPrecio === "normal"))) return null;
+                      return (
+                        <select aria-label={`Tipo de precio de ${item.nombre}`} style={{ ...styles.input, maxWidth: "100%" }} value={item.tipoPrecio || "normal"} disabled={registrandoVenta} onChange={(e) => cambiarTipoPrecioCarrito(index, e.target.value as TipoPrecioVenta)}>
+                          <option value="normal">Habitual · {money(producto.precio)}</option>
+                          {(producto.precioMayorista != null || item.tipoPrecio === "mayorista") && <option value="mayorista" disabled={producto.precioMayorista == null}>Mayorista · {producto.precioMayorista == null ? "No disponible" : money(producto.precioMayorista)}</option>}
+                          {(producto.precioPromocional != null || item.tipoPrecio === "promocional") && <option value="promocional" disabled={producto.precioPromocional == null}>Promoción / combo · {producto.precioPromocional == null ? "No disponible" : money(producto.precioPromocional)}</option>}
+                        </select>
+                      );
+                    })()}
                   </div>
 
                   <div className="app-qty-stepper" style={styles.qtyStepper}>
